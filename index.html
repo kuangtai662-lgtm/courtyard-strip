@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>庭院微光 · 桌面条 Demo</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #14181a; color: #e9e4d8;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .wrap { min-height: 100%; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 18px; padding: 32px 20px; box-sizing: border-box; }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: 0.08em; margin: 0; color: #f4efe3; }
+  p { margin: 0; font-size: 13px; line-height: 1.9; color: #a9b0a6; text-align: center; max-width: 720px; }
+  .frame { border-radius: 10px; overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,.55);
+    border: 1px solid rgba(255,255,255,.08); background: #0d1011; }
+  iframe { display: block; width: 1280px; height: 240px; border: 0; }
+  .small { font-size: 12px; color: #7d857c; }
+  kbd { border: 1px solid rgba(255,255,255,.18); border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+  @media (max-width: 1320px) {
+    .frame { width: 100%; max-width: 1280px; }
+    iframe { width: 100%; height: auto; aspect-ratio: 1280 / 240; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>庭院微光 · 桌面条</h1>
+  <p>这是放在屏幕底部的一条小庭院：植物会自己长，灯笼夜里会亮，偶尔有访客路过。<br>
+     建议把浏览器窗口拉成一条横条，放到屏幕下方，然后去干别的事——半小时后再回来看。</p>
+  <div class="frame"><iframe src="game.html" title="庭院微光"></iframe></div>
+  <p class="small">操作：点击成熟植物收获 · 点击设施升级 · 点击访客领取 · <kbd>R</kbd> 无（重开请刷新）</p>
+</div>
+</body>
+</html>

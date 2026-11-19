@@ -1,0 +1,3530 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="description" content="庭院微光 · 桌面条 — 1280×240 单文件 Canvas 放置庭院">
+<title>庭院微光 · 桌面条</title>
+<style>
+  :root { background: #efe6d2; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #efe6d2;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #game {
+    display: block;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    box-shadow: 0 8px 40px rgba(63, 85, 73, 0.18);
+  }
+</style>
+</head>
+<body>
+<canvas id="game" aria-label="庭院微光桌面条游戏画布"></canvas>
+<script>
+window.__STRIP_BUILD__ = "single-file";
+window.__STRIP_TUNING__ = {"canvas":{"w":1280,"h":240},"plots":6,"plant":{"growSec":60,"yield":5},"buildings":[{"id":"plot","name":"花圃","cost":20,"growth":1.18,"rate":0.2},{"id":"lantern","name":"灯笼","cost":120,"growth":1.22,"rate":1.2},{"id":"wheel","name":"水车","cost":800,"growth":1.25,"rate":6},{"id":"tower","name":"石塔","cost":5000,"growth":1.3,"rate":30}],"cycle":{"daySec":180,"nightSec":120},"seasonSec":600,"visitor":{"minSec":60,"maxSec":120,"buffSec":600,"buffMult":1.1},"letterAtSec":300,"offline":{"capSec":28800,"rate":0.5},"save":{"key":"courtyard.strip.v1","version":1}};
+</script>
+<script>
+/* 由 build.cjs 从 src/*.js 内联生成；请修改 src/ 后重新构建。 */
+(function () {
+'use strict';
+var __modules = {};
+var __cache = {};
+function __normalize(id) { return String(id).replace(/^\.\//, "").replace(/\.js$/, ""); }
+function __require(id) {
+  id = __normalize(id);
+  if (__cache[id]) return __cache[id].exports;
+  var module = { exports: {} };
+  __cache[id] = module;
+  var factory = __modules[id];
+  if (typeof factory !== "function") throw new Error("E_MODULE " + id);
+  factory(module, module.exports, __require);
+  return module.exports;
+}
+__modules["theme"] = function (module, exports, require) {
+'use strict';
+
+/**
+ * 庭院微光 · 桌面条（B1）· 表现层主题
+ *
+ * 纯数据 + 纯函数：不引用 DOM / Canvas / 时钟 / Math.random。
+ * 全部颜色字面量只出现在本文件；render.js 只消费 palette。
+ *
+ *  - 四季调色板（春/夏/秋/冬）× 昼夜两套，春为切片默认；
+ *  - 夜色调由日色向靛青深处混合得到，灯笼/星星/萤火保留暖光；
+ *  - 提供对比度工具，供测试断言 HUD 可读性。
+ */
+
+function clamp(value, min, max) {
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
+
+function toHex2(value) {
+  const v = clamp(Math.round(value), 0, 255);
+  return v < 16 ? '0' + v.toString(16) : v.toString(16);
+}
+
+function rgbToHex(rgb) {
+  return '#' + toHex2(rgb.r) + toHex2(rgb.g) + toHex2(rgb.b);
+}
+
+/** "#rrggbb" / "#rgb" → {r,g,b}。 */
+function hexToRgb(hex) {
+  let text = String(hex || '').trim();
+  if (text.charAt(0) === '#') text = text.slice(1);
+  if (text.length === 3) {
+    text =
+      text.charAt(0) + text.charAt(0) + text.charAt(1) + text.charAt(1) + text.charAt(2) + text.charAt(2);
+  }
+  if (!/^[0-9a-fA-F]{6}$/.test(text)) throw new Error('非法颜色 ' + hex);
+  return {
+    r: parseInt(text.slice(0, 2), 16),
+    g: parseInt(text.slice(2, 4), 16),
+    b: parseInt(text.slice(4, 6), 16),
+  };
+}
+
+/** 两色线性混合（t=0 取 a，t=1 取 b）。 */
+function mixHex(a, b, t) {
+  const ca = hexToRgb(a);
+  const cb = hexToRgb(b);
+  const k = clamp(t, 0, 1);
+  return rgbToHex({
+    r: ca.r + (cb.r - ca.r) * k,
+    g: ca.g + (cb.g - ca.g) * k,
+    b: ca.b + (cb.b - ca.b) * k,
+  });
+}
+
+function withAlpha(color, alpha) {
+  const c = hexToRgb(color);
+  return 'rgba(' + c.r + ', ' + c.g + ', ' + c.b + ', ' + clamp(alpha, 0, 1).toFixed(3) + ')';
+}
+
+function relativeLuminance(hex) {
+  const c = hexToRgb(hex);
+  const channels = [c.r / 255, c.g / 255, c.b / 255].map(function (v) {
+    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+function contrastRatio(a, b) {
+  const la = relativeLuminance(a);
+  const lb = relativeLuminance(b);
+  const light = Math.max(la, lb);
+  const dark = Math.min(la, lb);
+  return (light + 0.05) / (dark + 0.05);
+}
+
+/** 确定性伪随机（程序化笔触 / 星点 / 草叶共用，不依赖 Math.random）。 */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a += 0x6d2b79f5;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** 二维确定性哈希：给纹理/星点用，避免每帧分配数组。 */
+function hash2(x, y, seed) {
+  let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(seed | 0, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+// ---------------------------------------------------------------------------
+// 四季色板（日）
+// ---------------------------------------------------------------------------
+
+const SPRING_DAY = {
+  skyTop: '#cbe7f0',
+  skyMid: '#9bc9d8',
+  skyBottom: '#f7eeda',
+  sun: '#fbe9b8',
+  sunGlow: '#fdf3cf',
+  cloud: '#fcf9f0',
+  star: '#fff7dc',
+  hillFar: '#c4d6c2',
+  hillMid: '#a9c6a6',
+  hillNear: '#8caf92',
+  ground: '#dce9d4',
+  groundAlt: '#d2e2cb',
+  groundEdge: '#a9c0a4',
+  soil: '#b08462',
+  soilDark: '#7d5a41',
+  grass: '#7f9f74',
+  leaf: '#5f8a63',
+  leafLight: '#8cae7f',
+  flower: '#df5f83',
+  flowerAlt: '#f2a0b6',
+  flowerCore: '#f6d47a',
+  wood: '#b98d5f',
+  woodDark: '#8a6540',
+  stone: '#a8a297',
+  stoneLight: '#d6d0c1',
+  stoneDark: '#6f6a5f',
+  water: '#9cc4c6',
+  waterSheen: '#e7f2ee',
+  paper: '#fbf6e8',
+  paperFiber: '#b9ae92',
+  panel: '#fdf8ec',
+  panelEdge: '#cdbf9f',
+  ink: '#2c352f',
+  inkSoft: '#46514a',
+  inkFaint: '#6b756d',
+  accent: '#3f6b52',
+  accentWarm: '#8f5a2e',
+  lanternStone: '#a8a18c',
+  lanternLight: '#ffcf7a',
+  flame: '#f7c96b',
+  glow: '#ffd98a',
+  buffGlow: '#f6c85f',
+  shadow: '#3f5549',
+  firefly: '#f2e6a5',
+};
+
+const SUMMER_DAY = {
+  skyTop: '#bfe3e7',
+  skyMid: '#7cc3c9',
+  skyBottom: '#f8f0cf',
+  sun: '#fbe6a4',
+  sunGlow: '#fdf1c8',
+  cloud: '#fdfaf0',
+  star: '#fff7dc',
+  hillFar: '#b9d4b4',
+  hillMid: '#96bd97',
+  hillNear: '#6fa47c',
+  ground: '#d6e7c4',
+  groundAlt: '#c9dfb9',
+  groundEdge: '#9cb98f',
+  soil: '#a97c58',
+  soilDark: '#74533b',
+  grass: '#6f9a60',
+  leaf: '#4f7f4f',
+  leafLight: '#7fa96b',
+  flower: '#e8843c',
+  flowerAlt: '#f3c35c',
+  flowerCore: '#f9e19a',
+  wood: '#b58a58',
+  woodDark: '#82603c',
+  stone: '#a6a08f',
+  stoneLight: '#d4cdb8',
+  stoneDark: '#6c6759',
+  water: '#8ec4c2',
+  waterSheen: '#e9f5ea',
+  paper: '#fbf7e6',
+  paperFiber: '#b3a884',
+  panel: '#fdf9e9',
+  panelEdge: '#cbbc94',
+  ink: '#2b352c',
+  inkSoft: '#43503f',
+  inkFaint: '#687566',
+  accent: '#356b56',
+  accentWarm: '#8b5626',
+  lanternStone: '#a59d84',
+  lanternLight: '#ffcb6f',
+  flame: '#f8c25c',
+  glow: '#ffd77f',
+  buffGlow: '#f3c050',
+  shadow: '#36503f',
+  firefly: '#f4e7a2',
+};
+
+const AUTUMN_DAY = {
+  skyTop: '#e6d3b6',
+  skyMid: '#dab387',
+  skyBottom: '#f7e5c8',
+  sun: '#f8ddab',
+  sunGlow: '#fbeac6',
+  cloud: '#fbf3e2',
+  star: '#fff3d6',
+  hillFar: '#cbb78f',
+  hillMid: '#b9a074',
+  hillNear: '#9c8154',
+  ground: '#e6d6b5',
+  groundAlt: '#dccaa6',
+  groundEdge: '#b09a74',
+  soil: '#a87a54',
+  soilDark: '#76543a',
+  grass: '#96814f',
+  leaf: '#9a7b48',
+  leafLight: '#bfa168',
+  flower: '#c96a45',
+  flowerAlt: '#e3a25f',
+  flowerCore: '#f3cf87',
+  wood: '#a97e50',
+  woodDark: '#7b5835',
+  stone: '#a49b8b',
+  stoneLight: '#d3c8b2',
+  stoneDark: '#6b6457',
+  water: '#a8b8ad',
+  waterSheen: '#efe9d4',
+  paper: '#fbf3e0',
+  paperFiber: '#b7a482',
+  panel: '#fcf5e4',
+  panelEdge: '#cdb990',
+  ink: '#382f26',
+  inkSoft: '#514438',
+  inkFaint: '#786a58',
+  accent: '#6b5a34',
+  accentWarm: '#95481f',
+  lanternStone: '#a89b80',
+  lanternLight: '#ffc879',
+  flame: '#f6b95f',
+  glow: '#ffd08a',
+  buffGlow: '#efb55f',
+  shadow: '#594a35',
+  firefly: '#f2dfa0',
+};
+
+const WINTER_DAY = {
+  skyTop: '#d7e3ea',
+  skyMid: '#b7cbd8',
+  skyBottom: '#f0ece4',
+  sun: '#f7ecd8',
+  sunGlow: '#fbf4e6',
+  cloud: '#f8f7f3',
+  star: '#f4f8ff',
+  hillFar: '#cfd8d2',
+  hillMid: '#b9c7c1',
+  hillNear: '#a3b4ae',
+  ground: '#edf0e9',
+  groundAlt: '#e3e9e1',
+  groundEdge: '#b9c5bd',
+  soil: '#9a8b7e',
+  soilDark: '#6f6359',
+  grass: '#8d9c90',
+  leaf: '#6f8577',
+  leafLight: '#95a99a',
+  flower: '#c76b7b',
+  flowerAlt: '#e2a5ae',
+  flowerCore: '#eed7a6',
+  wood: '#a98c6a',
+  woodDark: '#7c6249',
+  stone: '#a6a8a4',
+  stoneLight: '#d9dbd5',
+  stoneDark: '#6e726e',
+  water: '#b4c8cf',
+  waterSheen: '#eef4f4',
+  paper: '#f9f6ee',
+  paperFiber: '#b3b7ac',
+  panel: '#fbf9f3',
+  panelEdge: '#c4c8bd',
+  ink: '#2e3537',
+  inkSoft: '#48514f',
+  inkFaint: '#6c7674',
+  accent: '#4d6a63',
+  accentWarm: '#7d5a3f',
+  lanternStone: '#a1a49c',
+  lanternLight: '#ffd08d',
+  flame: '#f7c77e',
+  glow: '#ffe0a6',
+  buffGlow: '#eec279',
+  shadow: '#485753',
+  firefly: '#eef0d6',
+};
+
+const SEASONS = [
+  { id: 'spring', name: '春', note: '新绿 · 樱粉', day: SPRING_DAY },
+  { id: 'summer', name: '夏', note: '浓荫 · 麦金', day: SUMMER_DAY },
+  { id: 'autumn', name: '秋', note: '暖赭 · 叶黄', day: AUTUMN_DAY },
+  { id: 'winter', name: '冬', note: '薄雪 · 灰青', day: WINTER_DAY },
+];
+
+// ---------------------------------------------------------------------------
+// 夜色调：把日色向靛青/深林方向压暗；灯笼、星星、萤火单独保留暖光
+// ---------------------------------------------------------------------------
+
+const NIGHT_TARGET = '#141d2e';
+
+const NIGHT_MIX = {
+  skyTop: 0.88,
+  skyMid: 0.82,
+  skyBottom: 0.72,
+  sun: 0.9,
+  sunGlow: 0.78,
+  cloud: 0.74,
+  star: 0,
+  hillFar: 0.84,
+  hillMid: 0.86,
+  hillNear: 0.88,
+  ground: 0.8,
+  groundAlt: 0.8,
+  groundEdge: 0.84,
+  soil: 0.72,
+  soilDark: 0.8,
+  grass: 0.7,
+  leaf: 0.72,
+  leafLight: 0.68,
+  flower: 0.58,
+  flowerAlt: 0.62,
+  flowerCore: 0.5,
+  wood: 0.7,
+  woodDark: 0.76,
+  stone: 0.7,
+  stoneLight: 0.66,
+  stoneDark: 0.76,
+  water: 0.72,
+  waterSheen: 0.75,
+  paper: 0.9,
+  paperFiber: 0.82,
+  panel: 0.9,
+  panelEdge: 0.8,
+  ink: 0.9,
+  inkSoft: 0.82,
+  inkFaint: 0.72,
+  accent: 0.72,
+  accentWarm: 0.62,
+  lanternStone: 0.66,
+  lanternLight: 0,
+  flame: 0,
+  glow: 0,
+  buffGlow: 0,
+  shadow: 0.9,
+  firefly: 0,
+};
+
+const WARM_FIX = {
+  sun: '#efe8d2',
+  sunGlow: '#e4ddc8',
+  star: '#fff7dc',
+  lanternLight: '#ffc06e',
+  flame: '#ffd27a',
+  glow: '#ffd08a',
+  buffGlow: '#ffd98a',
+  firefly: '#f2e6a5',
+  paperFiber: '#d9d6c8',
+  ink: '#f2edde',
+  inkSoft: '#cfc9ba',
+  inkFaint: '#a9a496',
+  panel: '#26334a',
+  panelEdge: '#6c788f',
+  accent: '#a9ccb3',
+  accentWarm: '#e8bc86',
+  shadow: '#0d1420',
+};
+
+function nightPalette(day) {
+  const out = {};
+  const keys = Object.keys(day);
+  for (let i = 0; i < keys.length; i += 1) {
+    const key = keys[i];
+    if (Object.prototype.hasOwnProperty.call(WARM_FIX, key)) {
+      out[key] = WARM_FIX[key];
+    } else {
+      const ratio = Object.prototype.hasOwnProperty.call(NIGHT_MIX, key) ? NIGHT_MIX[key] : 0.8;
+      out[key] = mixHex(day[key], NIGHT_TARGET, ratio);
+    }
+  }
+  out.paper = '#2a3447';
+  out.panel = '#26334a';
+  out.ink = '#f2edde';
+  out.skyBottom = mixHex(day.skyBottom, '#55617a', 0.8);
+  out.waterSheen = mixHex(day.waterSheen, '#b7d1d0', 0.55);
+  return out;
+}
+
+const NIGHT_KEYS = {};
+for (let i = 0; i < SEASONS.length; i += 1) {
+  NIGHT_KEYS[SEASONS[i].id] = nightPalette(SEASONS[i].day);
+}
+
+/** 色板缓存（render 每帧取用，不重复创建对象）。 */
+const PALETTE_CACHE = {};
+
+/**
+ * 取色板。
+ * @param {number} season 0..3
+ * @param {'day'|'night'} phase
+ */
+function getPalette(season, phase) {
+  const index = ((Math.floor(Number(season) || 0) % SEASONS.length) + SEASONS.length) % SEASONS.length;
+  const isNight = phase === 'night';
+  const key = (isNight ? 'n' : 'd') + index;
+  if (PALETTE_CACHE[key]) return PALETTE_CACHE[key];
+  const source = isNight ? NIGHT_KEYS[SEASONS[index].id] : SEASONS[index].day;
+  const palette = {};
+  const keys = Object.keys(source);
+  for (let i = 0; i < keys.length; i += 1) palette[keys[i]] = source[keys[i]];
+  palette.seasonIndex = index;
+  palette.seasonId = SEASONS[index].id;
+  palette.seasonName = SEASONS[index].name;
+  palette.phase = isNight ? 'night' : 'day';
+  palette.key = key;
+  PALETTE_CACHE[key] = palette;
+  return palette;
+}
+
+/** 两个色板线性混合（昼夜 200ms 过渡用）。 */
+function mixPalette(a, b, t) {
+  const k = clamp(Number(t) || 0, 0, 1);
+  const out = {};
+  const keys = Object.keys(b);
+  for (let i = 0; i < keys.length; i += 1) {
+    const key = keys[i];
+    if (typeof b[key] === 'string' && b[key].charAt(0) === '#' && typeof a[key] === 'string' && a[key].charAt(0) === '#') {
+      out[key] = mixHex(a[key], b[key], k);
+    } else {
+      out[key] = b[key];
+    }
+  }
+  out.key = (a.key || '') + '>' + (b.key || '');
+  out.seasonIndex = b.seasonIndex;
+  out.seasonId = b.seasonId;
+  out.seasonName = b.seasonName;
+  out.phase = b.phase;
+  return out;
+}
+
+/** 四季名称（UI / 测试共用）。 */
+function seasonName(season) {
+  const index = ((Math.floor(Number(season) || 0) % SEASONS.length) + SEASONS.length) % SEASONS.length;
+  return SEASONS[index].name;
+}
+
+function seasonById(id) {
+  for (let i = 0; i < SEASONS.length; i += 1) if (SEASONS[i].id === id) return SEASONS[i];
+  return SEASONS[0];
+}
+
+// ---------------------------------------------------------------------------
+// 文本/数字格式（纯函数，UI 与测试共用）
+// ---------------------------------------------------------------------------
+
+function formatDew(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return '0';
+  if (n >= 100000000) return (n / 100000000).toFixed(1) + '亿';
+  if (n >= 10000) return (n / 10000).toFixed(1) + '万';
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function formatRate(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '+0';
+  if (n >= 100) return '+' + Math.round(n);
+  if (n >= 10) return '+' + n.toFixed(0);
+  return '+' + n.toFixed(1);
+}
+
+function formatCountdown(sec) {
+  const total = Math.max(0, Math.ceil(Number(sec) || 0));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m + ':' + (s < 10 ? '0' + s : String(s));
+}
+
+function formatDuration(sec) {
+  const total = Math.max(0, Math.floor(Number(sec) || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  if (h > 0) return h + ' 小时' + (m > 0 ? ' ' + m + ' 分' : '');
+  if (m > 0) return m + ' 分钟';
+  return total + ' 秒';
+}
+
+const FONT_STACK = '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Hiragino Sans GB", sans-serif';
+
+function font(size, weight) {
+  return (weight || 400) + ' ' + size + 'px ' + FONT_STACK;
+}
+
+/** HUD 可读性断言清单（render/tests 共用）。 */
+function getContrastPairs(palette) {
+  return [
+    { label: 'ink/panel', fg: palette.ink, bg: palette.panel, min: 4.5 },
+    { label: 'inkSoft/panel', fg: palette.inkSoft, bg: palette.panel, min: 3 },
+    { label: 'accent/panel', fg: palette.accent, bg: palette.panel, min: 3 },
+    { label: 'ink/ground', fg: palette.ink, bg: palette.ground, min: 3 },
+  ];
+}
+
+module.exports = {
+  clamp: clamp,
+  hexToRgb: hexToRgb,
+  mixHex: mixHex,
+  withAlpha: withAlpha,
+  contrastRatio: contrastRatio,
+  relativeLuminance: relativeLuminance,
+  mulberry32: mulberry32,
+  hash2: hash2,
+  SEASONS: SEASONS,
+  NIGHT_TARGET: NIGHT_TARGET,
+  getPalette: getPalette,
+  mixPalette: mixPalette,
+  seasonName: seasonName,
+  seasonById: seasonById,
+  nightPalette: nightPalette,
+  formatDew: formatDew,
+  formatRate: formatRate,
+  formatCountdown: formatCountdown,
+  formatDuration: formatDuration,
+  font: font,
+  getContrastPairs: getContrastPairs,
+};
+
+};
+__modules["logic"] = function (module, exports, require) {
+'use strict';
+
+/**
+ * 庭院微光 · 桌面条（B1）· 纯逻辑层
+ *
+ * 硬约束：
+ *  - 不引用 document / window / localStorage / performance / Math.random / Date：
+ *    唯一时间入口是 tick(state, dtSec) 与 click 类函数的已给参数；
+ *  - 状态是纯 JSON 可序列化对象（tuning 藏在不可枚举属性里，不进存档）；
+ *  - 确定性：所有随机（访客种类/间隔）走 state.rng 的 mulberry32 流，
+ *    存进存档即可跨会话延续；
+ *  - 6 个种植槽 / 4 类设施 / 3 种访客 / 1 封手写信 / 四季 / 昼夜 / 离线。
+ *
+ * 对外契约：
+ *  - createState(tuning) -> state
+ *  - tick(state, dtSec) -> gained       推进时间（被动产出露水），返回本次露水
+ *  - harvest(state, index) -> {ok,gain,stage}   点击成熟植物收获并重新播种
+ *  - buy(state, id) -> boolean          升级设施（成本指数增长）
+ *  - claimVisitor(state) -> boolean     点访客领取稀有种子（10 分钟 ×1.1 收获）
+ *  - openLetter(state) / finishLetter(state) -> boolean   读信并永久解锁回忆
+ *  - serialize / deserialize            存档（坏档降级，永不抛错）
+ *  - offlineGain / offlineBreakdown / applyOffline      离线 50% / 8 小时上限
+ *  - costOf / productionRate / passiveRate / phaseOf / plantStage / getView ...
+ */
+
+const EPS = 1e-9;
+const SEASON_COUNT = 4;
+const VISITOR_KINDS = ['bird', 'cat', 'rabbit'];
+const VISITOR_LIFE_SEC = 45;
+const LETTER_STATES = ['hidden', 'ready', 'open', 'read'];
+
+/** 开局：花圃 Lv.1 + 6 个槽位的错峰生长（几秒内就有第一朵可收）。 */
+const STARTER_LEVELS = { plot: 1, lantern: 0, wheel: 0, tower: 0 };
+const STARTER_GROWTH = [52, 44, 36, 28, 20, 12];
+
+/** 唯一一封手写信（≤60 字）。 */
+const LETTER_TEXT =
+  '今天的风把竹帘吹得轻轻响。你走以后，我在石阶边种了一小片薄荷。等它长大，就当是你回来了。';
+
+/** 冻结数值基线（与 design/tuning.json 同步；构建期校验）。 */
+const DEFAULT_TUNING = {
+  canvas: { w: 1280, h: 240 },
+  plots: 6,
+  plant: { growSec: 60, yield: 5 },
+  buildings: [
+    { id: 'plot', name: '花圃', cost: 20, growth: 1.18, rate: 0.2 },
+    { id: 'lantern', name: '灯笼', cost: 120, growth: 1.22, rate: 1.2 },
+    { id: 'wheel', name: '水车', cost: 800, growth: 1.25, rate: 6 },
+    { id: 'tower', name: '石塔', cost: 5000, growth: 1.3, rate: 30 },
+  ],
+  cycle: { daySec: 180, nightSec: 120 },
+  seasonSec: 600,
+  visitor: { minSec: 60, maxSec: 120, buffSec: 600, buffMult: 1.1 },
+  letterAtSec: 300,
+  offline: { capSec: 28800, rate: 0.5 },
+  save: { key: 'courtyard.strip.v1', version: 1 },
+};
+
+const SAVE_OK = null;
+const SAVE_CORRUPT = 'corrupt';
+const SAVE_VERSION = 'version';
+
+// ---------------------------------------------------------------------------
+// 小工具
+// ---------------------------------------------------------------------------
+
+function isFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isPositive(value) {
+  return isFiniteNumber(value) && value > 0;
+}
+
+function isNonNegative(value) {
+  return isFiniteNumber(value) && value >= 0;
+}
+
+function isInteger(value) {
+  return isFiniteNumber(value) && Math.floor(value) === value;
+}
+
+function clamp(value, min, max) {
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+/** 不可枚举内部字段：不进入 JSON.stringify / 存档 / 状态快照。 */
+function hide(object, key, value) {
+  Object.defineProperty(object, key, {
+    value: value,
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
+function pickPositive(value, fallback) {
+  return isPositive(value) ? value : fallback;
+}
+
+function pickNonNegative(value, fallback) {
+  return isNonNegative(value) ? value : fallback;
+}
+
+function pickInteger(value, fallback, min, max) {
+  if (!isInteger(value)) return fallback;
+  return clamp(value, min, max);
+}
+
+// ---------------------------------------------------------------------------
+// 配置归一化（缺键/类型错 → 兜底，绝不抛错）
+// ---------------------------------------------------------------------------
+
+function normalizeBuildings(raw) {
+  const fallback = DEFAULT_TUNING.buildings;
+  const list = Array.isArray(raw) && raw.length ? raw : fallback;
+  const out = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const item = list[i] && typeof list[i] === 'object' && !Array.isArray(list[i]) ? list[i] : null;
+    let base = fallback[Math.min(i, fallback.length - 1)];
+    if (item && typeof item.id === 'string') {
+      for (let k = 0; k < fallback.length; k += 1) if (fallback[k].id === item.id) base = fallback[k];
+    }
+    out.push({
+      id: item && typeof item.id === 'string' && item.id ? item.id : base.id,
+      name: item && typeof item.name === 'string' && item.name ? item.name : base.name,
+      cost: pickPositive(item && item.cost, base.cost),
+      growth: item && isFiniteNumber(item.growth) && item.growth > 1 ? item.growth : base.growth,
+      rate: pickPositive(item && item.rate, base.rate),
+    });
+  }
+  return out.length ? out : clone(DEFAULT_TUNING.buildings);
+}
+
+/**
+ * 合并/兜底一份 tuning。非法输入返回默认基线，永不抛错。
+ * @param {object} [input]
+ */
+function normalizeTuning(input) {
+  const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const canvas = raw.canvas && typeof raw.canvas === 'object' ? raw.canvas : {};
+  const plant = raw.plant && typeof raw.plant === 'object' ? raw.plant : {};
+  const cycle = raw.cycle && typeof raw.cycle === 'object' ? raw.cycle : {};
+  const visitor = raw.visitor && typeof raw.visitor === 'object' ? raw.visitor : {};
+  const offline = raw.offline && typeof raw.offline === 'object' ? raw.offline : {};
+  const save = raw.save && typeof raw.save === 'object' ? raw.save : {};
+  const version = isInteger(save.version) && save.version >= 1 ? save.version : DEFAULT_TUNING.save.version;
+  const minSec = pickPositive(visitor.minSec, DEFAULT_TUNING.visitor.minSec);
+  const maxSec = Math.max(minSec, pickPositive(visitor.maxSec, DEFAULT_TUNING.visitor.maxSec));
+  return {
+    canvas: {
+      w: pickPositive(canvas.w, DEFAULT_TUNING.canvas.w),
+      h: pickPositive(canvas.h, DEFAULT_TUNING.canvas.h),
+    },
+    plots: pickInteger(raw.plots, DEFAULT_TUNING.plots, 1, 12),
+    plant: {
+      growSec: pickPositive(plant.growSec, DEFAULT_TUNING.plant.growSec),
+      yield: pickPositive(plant.yield, DEFAULT_TUNING.plant.yield),
+    },
+    buildings: normalizeBuildings(raw.buildings),
+    cycle: {
+      daySec: pickPositive(cycle.daySec, DEFAULT_TUNING.cycle.daySec),
+      nightSec: pickPositive(cycle.nightSec, DEFAULT_TUNING.cycle.nightSec),
+    },
+    seasonSec: pickPositive(raw.seasonSec, DEFAULT_TUNING.seasonSec),
+    visitor: {
+      minSec: minSec,
+      maxSec: maxSec,
+      buffSec: pickPositive(visitor.buffSec, DEFAULT_TUNING.visitor.buffSec),
+      buffMult: isPositive(visitor.buffMult) ? visitor.buffMult : DEFAULT_TUNING.visitor.buffMult,
+    },
+    letterAtSec: pickNonNegative(raw.letterAtSec, DEFAULT_TUNING.letterAtSec),
+    offline: {
+      capSec: pickPositive(offline.capSec, DEFAULT_TUNING.offline.capSec),
+      rate: isNonNegative(offline.rate) ? clamp(offline.rate, 0, 1) : DEFAULT_TUNING.offline.rate,
+    },
+    save: {
+      key: typeof save.key === 'string' && save.key ? save.key : DEFAULT_TUNING.save.key,
+      version: version,
+    },
+  };
+}
+
+function tuningOf(state) {
+  return state && state._tuning ? state._tuning : normalizeTuning(null);
+}
+
+function buildingOf(state, id) {
+  const tuning = tuningOf(state);
+  for (let i = 0; i < tuning.buildings.length; i += 1) {
+    if (tuning.buildings[i].id === id) return tuning.buildings[i];
+  }
+  return null;
+}
+
+function buildingAt(state, index) {
+  const tuning = tuningOf(state);
+  return tuning.buildings[index] || null;
+}
+
+// ---------------------------------------------------------------------------
+// 确定性随机（存档携带 rng，读档后序列可延续）
+// ---------------------------------------------------------------------------
+
+function nextRandom(state) {
+  let a = (state.rng >>> 0) + 0x6d2b79f5;
+  a = a >>> 0;
+  let t = a;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  state.rng = a;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+function randomRange(state, min, max) {
+  return min + (max - min) * nextRandom(state);
+}
+
+// ---------------------------------------------------------------------------
+// 状态构造
+// ---------------------------------------------------------------------------
+
+function makePlots(tuning) {
+  const count = tuning.plots;
+  const plots = [];
+  for (let i = 0; i < count; i += 1) {
+    const offset = STARTER_GROWTH[Math.min(i, STARTER_GROWTH.length - 1)];
+    plots.push({ g: Math.min(tuning.plant.growSec, offset) });
+  }
+  return plots;
+}
+
+function makeLevels(tuning) {
+  const levels = {};
+  for (let i = 0; i < tuning.buildings.length; i += 1) {
+    const id = tuning.buildings[i].id;
+    levels[id] = isPositive(STARTER_LEVELS[id]) ? STARTER_LEVELS[id] : 0;
+  }
+  return levels;
+}
+
+/**
+ * 创建一局新游戏。
+ * @param {object} [tuning] design/tuning.json；缺省用冻结基线
+ * @returns {object} state
+ */
+function createState(tuning) {
+  const normalized = normalizeTuning(tuning);
+  const state = {
+    version: normalized.save.version,
+    dew: 0,
+    total: 0,
+    plots: makePlots(normalized),
+    levels: makeLevels(normalized),
+    cycleT: 0,
+    seasonT: 0,
+    season: 0,
+    playT: 0,
+    visitor: null,
+    visitorT: 0,
+    buffT: 0,
+    letter: 'hidden',
+    memories: [],
+    harvests: 0,
+    upgrades: 0,
+    visitorsMet: 0,
+    lettersRead: 0,
+    offlineCollected: 0,
+    lastSeenMs: 0,
+    rng: 0x9e3779b9,
+  };
+  state.visitorT = randomRange(state, normalized.visitor.minSec, normalized.visitor.maxSec);
+  hide(state, '_tuning', normalized);
+  hide(state, '_saveError', SAVE_OK);
+  return state;
+}
+
+function freshState(tuning, saveError) {
+  const state = createState(tuning);
+  hide(state, '_saveError', saveError || SAVE_OK);
+  return state;
+}
+
+// ---------------------------------------------------------------------------
+// 只读查询
+// ---------------------------------------------------------------------------
+
+/** 设施下一级成本（指数增长）。未知 id → Infinity。 */
+function costOf(state, id) {
+  const building = buildingOf(state, id);
+  if (!building) return Infinity;
+  const level = isNonNegative(state.levels[id]) ? state.levels[id] : 0;
+  const cost = building.cost * Math.pow(building.growth, level);
+  return isFiniteNumber(cost) ? cost : Infinity;
+}
+
+function canAfford(state, id) {
+  return state.dew + EPS >= costOf(state, id);
+}
+
+/** 设施等级贡献的被动露水/秒（不含点击收获）。 */
+function passiveRate(state) {
+  const tuning = tuningOf(state);
+  let rate = 0;
+  for (let i = 0; i < tuning.buildings.length; i += 1) {
+    const building = tuning.buildings[i];
+    const level = isNonNegative(state.levels[building.id]) ? state.levels[building.id] : 0;
+    rate += level * building.rate;
+  }
+  return rate;
+}
+
+/** 兼容别名：当前被动产出（昼夜同价，灯笼只影响表现）。 */
+function productionRate(state) {
+  return passiveRate(state);
+}
+
+/** 单次收获的露水（含稀有种子加成）。 */
+function harvestYield(state) {
+  const tuning = tuningOf(state);
+  const mult = state.buffT > EPS ? tuning.visitor.buffMult : 1;
+  return tuning.plant.yield * mult;
+}
+
+/** 槽位生长进度 0..1。 */
+function plotProgress(state, index) {
+  const plot = state.plots[index];
+  if (!plot) return 0;
+  const growSec = tuningOf(state).plant.growSec;
+  return clamp((isNonNegative(plot.g) ? plot.g : 0) / growSec, 0, 1);
+}
+
+/** 生长阶段：0 芽 / 1 苗 / 2 花（成熟）。 */
+function plantStage(state, index) {
+  const progress = plotProgress(state, index);
+  if (progress >= 1 - EPS) return 2;
+  if (progress >= 0.4) return 1;
+  return 0;
+}
+
+function isMature(state, index) {
+  return plantStage(state, index) === 2;
+}
+
+function phaseOf(state) {
+  return state.cycleT < tuningOf(state).cycle.daySec ? 'day' : 'night';
+}
+
+function phaseRemainingSec(state) {
+  const tuning = tuningOf(state);
+  if (phaseOf(state) === 'day') return tuning.cycle.daySec - state.cycleT;
+  return tuning.cycle.daySec + tuning.cycle.nightSec - state.cycleT;
+}
+
+function cyclePeriodSec(state) {
+  const tuning = tuningOf(state);
+  return tuning.cycle.daySec + tuning.cycle.nightSec;
+}
+
+function seasonOf(state) {
+  return ((Math.floor(state.season) % SEASON_COUNT) + SEASON_COUNT) % SEASON_COUNT;
+}
+
+function seasonRemainingSec(state) {
+  return tuningOf(state).seasonSec - state.seasonT;
+}
+
+function buffRemainingSec(state) {
+  return Math.max(0, state.buffT);
+}
+
+function visitorPresent(state) {
+  return !!state.visitor;
+}
+
+/** 手写信文本（未解锁时也返回内容，供渲染打开态使用）。 */
+function letterText() {
+  return LETTER_TEXT;
+}
+
+function letterMemories(state) {
+  return Array.isArray(state.memories) ? state.memories.slice() : [];
+}
+
+// ---------------------------------------------------------------------------
+// 推进时间
+// ---------------------------------------------------------------------------
+
+function advanceCycle(state, dt) {
+  const tuning = tuningOf(state);
+  const period = tuning.cycle.daySec + tuning.cycle.nightSec;
+  state.cycleT = (state.cycleT + dt) % period;
+  if (state.cycleT < EPS) state.cycleT = 0;
+}
+
+function advanceSeason(state, dt) {
+  const tuning = tuningOf(state);
+  const seasonSec = tuning.seasonSec;
+  const total = state.seasonT + dt;
+  const steps = Math.floor(total / seasonSec);
+  state.seasonT = total - steps * seasonSec;
+  if (state.seasonT < EPS) state.seasonT = 0;
+  state.season = (seasonOf(state) + steps) % SEASON_COUNT;
+}
+
+function spawnVisitor(state) {
+  const index = Math.floor(nextRandom(state) * VISITOR_KINDS.length) % VISITOR_KINDS.length;
+  state.visitor = { kind: VISITOR_KINDS[index], lifeSec: VISITOR_LIFE_SEC };
+  state.visitorT = 0;
+}
+
+function nextVisitorTimer(state) {
+  const tuning = tuningOf(state);
+  state.visitorT = randomRange(state, tuning.visitor.minSec, tuning.visitor.maxSec);
+}
+
+/** 访客时间线：可用大 dt 一次推进（最多 512 段，极端值兜底）。 */
+function advanceVisitors(state, dt) {
+  let remaining = dt;
+  let guard = 0;
+  while (remaining > EPS && guard < 512) {
+    guard += 1;
+    if (state.visitor) {
+      const life = isPositive(state.visitor.lifeSec) ? state.visitor.lifeSec : VISITOR_LIFE_SEC;
+      const step = Math.min(remaining, life);
+      state.visitor.lifeSec = life - step;
+      remaining -= step;
+      if (state.visitor.lifeSec <= EPS) {
+        state.visitor = null;
+        nextVisitorTimer(state);
+      }
+    } else {
+      const wait = Math.max(0, isFiniteNumber(state.visitorT) ? state.visitorT : 0);
+      const step = Math.min(remaining, wait);
+      state.visitorT = wait - step;
+      remaining -= step;
+      if (state.visitorT <= EPS) {
+        spawnVisitor(state);
+      }
+    }
+  }
+  if (remaining > EPS) {
+    // 极端大 dt 兜底：跳过剩余的访客时间线，避免卡顿。
+    state.visitor = null;
+    nextVisitorTimer(state);
+  }
+}
+
+/**
+ * 推进 dt 秒（被动产出 + 生长 + 昼夜 + 季节 + 访客 + buff + 手写信）。
+ * @returns {number} 本次被动露水
+ */
+function tick(state, dtSec) {
+  const dt = Number(dtSec);
+  if (!isFiniteNumber(dt) || dt <= 0) return 0;
+  const tuning = tuningOf(state);
+  const passive = passiveRate(state);
+  const gained = passive > 0 ? passive * dt : 0;
+  state.dew += gained;
+  state.total += gained;
+  state.playT += dt;
+
+  for (let i = 0; i < state.plots.length; i += 1) {
+    const plot = state.plots[i];
+    plot.g = Math.min(tuning.plant.growSec, (isNonNegative(plot.g) ? plot.g : 0) + dt);
+  }
+
+  advanceCycle(state, dt);
+  advanceSeason(state, dt);
+  advanceVisitors(state, dt);
+
+  if (state.buffT > 0) state.buffT = Math.max(0, state.buffT - dt);
+
+  if (state.letter === 'hidden' && state.playT + EPS >= tuning.letterAtSec) {
+    state.letter = 'ready';
+  }
+  return gained;
+}
+
+// ---------------------------------------------------------------------------
+// 交互
+// ---------------------------------------------------------------------------
+
+/**
+ * 点击成熟植物：收获并重新播种。
+ * @returns {{ok:boolean, gain:number, stage:number, index:number}}
+ */
+function harvest(state, index) {
+  const tuning = tuningOf(state);
+  const i = Number(index);
+  if (!isInteger(i) || i < 0 || i >= state.plots.length) {
+    return { ok: false, gain: 0, stage: 0, index: i };
+  }
+  const stage = plantStage(state, i);
+  if (stage !== 2) return { ok: false, gain: 0, stage: stage, index: i };
+  const gain = harvestYield(state);
+  state.plots[i].g = 0;
+  state.dew += gain;
+  state.total += gain;
+  state.harvests += 1;
+  return { ok: true, gain: gain, stage: 2, index: i };
+}
+
+/**
+ * 升级设施（一次一级）。
+ * @returns {boolean} 是否成功
+ */
+function buy(state, id) {
+  const building = buildingOf(state, id);
+  if (!building) return false;
+  const cost = costOf(state, id);
+  if (!isFiniteNumber(cost) || state.dew + EPS < cost) return false;
+  state.dew = Math.max(0, state.dew - cost);
+  state.levels[building.id] = (isNonNegative(state.levels[building.id]) ? state.levels[building.id] : 0) + 1;
+  state.upgrades += 1;
+  return true;
+}
+
+/**
+ * 点击访客：领取稀有种子（+10% 收获，10 分钟），访客离开。
+ * @returns {boolean}
+ */
+function claimVisitor(state) {
+  if (!state.visitor) return false;
+  const tuning = tuningOf(state);
+  state.buffT = tuning.visitor.buffSec;
+  state.visitorsMet += 1;
+  state.visitor = null;
+  nextVisitorTimer(state);
+  return true;
+}
+
+/** 打开信封（仅 ready → open）。 */
+function openLetter(state) {
+  if (state.letter !== 'ready') return false;
+  state.letter = 'open';
+  return true;
+}
+
+/** 合上信（open → read），永久解锁一段回忆。 */
+function finishLetter(state) {
+  if (state.letter !== 'open') return false;
+  state.letter = 'read';
+  state.lettersRead += 1;
+  state.memories.push('letter-1');
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// 离线结算
+// ---------------------------------------------------------------------------
+
+/**
+ * 离线收益明细：被动产出 × 有效时长 × 离线效率（50%），有效时长封顶 8 小时。
+ */
+function offlineBreakdown(state, elapsedSec) {
+  const tuning = tuningOf(state);
+  const elapsed = isFiniteNumber(Number(elapsedSec)) && Number(elapsedSec) > 0 ? Number(elapsedSec) : 0;
+  const appliedSec = Math.min(elapsed, tuning.offline.capSec);
+  const rate = passiveRate(state) * tuning.offline.rate;
+  const gain = Math.max(0, rate * appliedSec);
+  return {
+    elapsedSec: elapsed,
+    appliedSec: appliedSec,
+    capSec: tuning.offline.capSec,
+    capped: elapsed > appliedSec + EPS,
+    rate: rate,
+    efficiency: tuning.offline.rate,
+    gain: isFiniteNumber(gain) ? gain : 0,
+  };
+}
+
+/** 离线收益（不改状态）。 */
+function offlineGain(state, elapsedSec) {
+  return offlineBreakdown(state, elapsedSec).gain;
+}
+
+/** 结算离线收益（改状态），返回明细。 */
+function applyOffline(state, elapsedSec) {
+  const info = offlineBreakdown(state, elapsedSec);
+  state.dew += info.gain;
+  state.total += info.gain;
+  state.offlineCollected += info.gain;
+  return info;
+}
+
+/** 记录最后一次见到玩家的墙上时间（外壳在存档时调用）。 */
+function markSeen(state, nowMs) {
+  const now = Number(nowMs);
+  if (isFiniteNumber(now) && now >= 0) state.lastSeenMs = now;
+  return state.lastSeenMs;
+}
+
+// ---------------------------------------------------------------------------
+// 存档
+// ---------------------------------------------------------------------------
+
+function savePayload(state) {
+  const plots = [];
+  for (let i = 0; i < state.plots.length; i += 1) {
+    plots.push(Math.max(0, state.plots[i].g));
+  }
+  const levels = {};
+  const levelKeys = Object.keys(state.levels);
+  for (let i = 0; i < levelKeys.length; i += 1) levels[levelKeys[i]] = state.levels[levelKeys[i]];
+  return {
+    version: state.version,
+    dew: state.dew,
+    total: state.total,
+    plots: plots,
+    levels: levels,
+    cycleT: state.cycleT,
+    seasonT: state.seasonT,
+    season: state.season,
+    playT: state.playT,
+    visitor: state.visitor ? { kind: state.visitor.kind, lifeSec: state.visitor.lifeSec } : null,
+    visitorT: state.visitorT,
+    buffT: state.buffT,
+    letter: state.letter,
+    memories: state.memories.slice(),
+    harvests: state.harvests,
+    upgrades: state.upgrades,
+    visitorsMet: state.visitorsMet,
+    lettersRead: state.lettersRead,
+    offlineCollected: state.offlineCollected,
+    lastSeenMs: state.lastSeenMs,
+    rng: state.rng,
+  };
+}
+
+function serialize(state) {
+  return JSON.stringify(savePayload(state));
+}
+
+function readLevels(raw, tuning) {
+  const levels = {};
+  if (raw !== undefined && (raw === null || typeof raw !== 'object' || Array.isArray(raw))) return null;
+  const source = raw && typeof raw === 'object' ? raw : {};
+  for (let i = 0; i < tuning.buildings.length; i += 1) {
+    const id = tuning.buildings[i].id;
+    if (!Object.prototype.hasOwnProperty.call(source, id)) {
+      levels[id] = isPositive(STARTER_LEVELS[id]) ? STARTER_LEVELS[id] : 0;
+      continue;
+    }
+    const value = source[id];
+    if (!isNonNegative(value) || !isInteger(value)) return null;
+    levels[id] = value;
+  }
+  return levels;
+}
+
+function readPlots(raw, tuning) {
+  if (raw === undefined) return makePlots(tuning);
+  if (!Array.isArray(raw) || raw.length !== tuning.plots) return null;
+  const plots = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const value = raw[i];
+    if (!isNonNegative(value)) return null;
+    plots.push({ g: Math.min(tuning.plant.growSec, value) });
+  }
+  return plots;
+}
+
+function readVisitor(raw) {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  if (VISITOR_KINDS.indexOf(raw.kind) === -1) return undefined;
+  if (!isPositive(raw.lifeSec)) return undefined;
+  return { kind: raw.kind, lifeSec: Math.min(VISITOR_LIFE_SEC, raw.lifeSec) };
+}
+
+function readLetter(raw) {
+  return LETTER_STATES.indexOf(raw) === -1 ? 'hidden' : raw;
+}
+
+function readMemories(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    if (typeof raw[i] === 'string' && raw[i].length <= 40) out.push(raw[i]);
+    if (out.length >= 16) break;
+  }
+  return out;
+}
+
+/**
+ * 反序列化。任何非法输入都降级为新局（不抛错），可用 getSaveError 查看原因。
+ * @param {string|object} json
+ * @param {object} [tuning]
+ */
+function deserialize(json, tuning) {
+  const normalized = normalizeTuning(tuning);
+  let payload;
+  try {
+    payload = typeof json === 'string' ? JSON.parse(json) : json;
+  } catch (err) {
+    return freshState(normalized, SAVE_CORRUPT);
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return freshState(normalized, SAVE_CORRUPT);
+  }
+  if (payload.version !== normalized.save.version) {
+    return freshState(normalized, SAVE_VERSION);
+  }
+  if (!isNonNegative(payload.dew) || !isNonNegative(payload.total)) return freshState(normalized, SAVE_CORRUPT);
+  const levels = readLevels(payload.levels, normalized);
+  if (!levels) return freshState(normalized, SAVE_CORRUPT);
+  const plots = readPlots(payload.plots, normalized);
+  if (!plots) return freshState(normalized, SAVE_CORRUPT);
+  const visitor = readVisitor(payload.visitor);
+  if (visitor === undefined) return freshState(normalized, SAVE_CORRUPT);
+  const cycleT = isNonNegative(payload.cycleT) ? payload.cycleT : 0;
+  const seasonT = isNonNegative(payload.seasonT) ? payload.seasonT : 0;
+  const season = isInteger(payload.season) ? ((payload.season % SEASON_COUNT) + SEASON_COUNT) % SEASON_COUNT : 0;
+  const memories = readMemories(payload.memories);
+  const state = {
+    version: normalized.save.version,
+    dew: payload.dew,
+    total: payload.total,
+    plots: plots,
+    levels: levels,
+    cycleT: cycleT % (normalized.cycle.daySec + normalized.cycle.nightSec),
+    seasonT: seasonT % normalized.seasonSec,
+    season: season,
+    playT: isNonNegative(payload.playT) ? payload.playT : 0,
+    visitor: visitor,
+    visitorT: isNonNegative(payload.visitorT) ? payload.visitorT : 0,
+    buffT: isNonNegative(payload.buffT) ? payload.buffT : 0,
+    letter: readLetter(payload.letter),
+    memories: memories,
+    harvests: isNonNegative(payload.harvests) ? Math.floor(payload.harvests) : 0,
+    upgrades: isNonNegative(payload.upgrades) ? Math.floor(payload.upgrades) : 0,
+    visitorsMet: isNonNegative(payload.visitorsMet) ? Math.floor(payload.visitorsMet) : 0,
+    lettersRead: isNonNegative(payload.lettersRead) ? Math.floor(payload.lettersRead) : 0,
+    offlineCollected: isNonNegative(payload.offlineCollected) ? payload.offlineCollected : 0,
+    lastSeenMs: isNonNegative(payload.lastSeenMs) ? payload.lastSeenMs : 0,
+    rng: isInteger(payload.rng) ? payload.rng >>> 0 : 0x9e3779b9,
+  };
+  if (state.letter === 'open' && state.memories.indexOf('letter-1') !== -1) state.letter = 'read';
+  hide(state, '_tuning', normalized);
+  hide(state, '_saveError', SAVE_OK);
+  return state;
+}
+
+function getSaveError(state) {
+  return state && state._saveError ? state._saveError : SAVE_OK;
+}
+
+function getTuning(state) {
+  return tuningOf(state);
+}
+
+// ---------------------------------------------------------------------------
+// 状态快照 / 每帧视图
+// ---------------------------------------------------------------------------
+
+function getState(state) {
+  return clone(savePayload(state));
+}
+
+function plotView(state, index) {
+  const progress = plotProgress(state, index);
+  const stage = plantStage(state, index);
+  return {
+    index: index,
+    progress: progress,
+    stage: stage,
+    mature: stage === 2,
+    remainingSec: Math.max(0, tuningOf(state).plant.growSec * (1 - progress)),
+  };
+}
+
+function buildingView(state, building) {
+  const level = isNonNegative(state.levels[building.id]) ? state.levels[building.id] : 0;
+  return {
+    id: building.id,
+    name: building.name,
+    level: level,
+    cost: costOf(state, building.id),
+    affordable: canAfford(state, building.id),
+    rate: level * building.rate,
+    gainPerUpgrade: building.rate,
+  };
+}
+
+/**
+ * 每帧只读投影（渲染/HUD 消费；不含 DOM）。
+ * @param {object} state
+ */
+function getView(state) {
+  const tuning = tuningOf(state);
+  const phase = phaseOf(state);
+  const plots = [];
+  for (let i = 0; i < state.plots.length; i += 1) plots.push(plotView(state, i));
+  const buildings = [];
+  for (let i = 0; i < tuning.buildings.length; i += 1) buildings.push(buildingView(state, tuning.buildings[i]));
+  const period = tuning.cycle.daySec + tuning.cycle.nightSec;
+  const season = seasonOf(state);
+  return {
+    version: state.version,
+    dew: state.dew,
+    total: state.total,
+    rate: passiveRate(state),
+    phase: phase,
+    daySec: tuning.cycle.daySec,
+    nightSec: tuning.cycle.nightSec,
+    phaseRemainingSec: phaseRemainingSec(state),
+    cycleProgress: (state.cycleT % period) / period,
+    phaseProgress:
+      phase === 'day'
+        ? clamp(state.cycleT / tuning.cycle.daySec, 0, 1)
+        : clamp((state.cycleT - tuning.cycle.daySec) / tuning.cycle.nightSec, 0, 1),
+    season: season,
+    seasonName: ['春', '夏', '秋', '冬'][season],
+    seasonT: state.seasonT,
+    seasonProgress: clamp(state.seasonT / tuning.seasonSec, 0, 1),
+    seasonRemainingSec: seasonRemainingSec(state),
+    playT: state.playT,
+    plots: plots,
+    buildings: buildings,
+    visitor: state.visitor ? { kind: state.visitor.kind, lifeSec: state.visitor.lifeSec } : null,
+    buff: {
+      active: state.buffT > EPS,
+      remainingSec: buffRemainingSec(state),
+      mult: tuning.visitor.buffMult,
+    },
+    letter: state.letter,
+    letterText: LETTER_TEXT,
+    letterRead: state.letter === 'read',
+    memories: letterMemories(state),
+    harvestYield: harvestYield(state),
+    harvests: state.harvests,
+    upgrades: state.upgrades,
+    visitorsMet: state.visitorsMet,
+    offline: { capSec: tuning.offline.capSec, rate: tuning.offline.rate },
+    saveKey: tuning.save.key,
+    plotCount: tuning.plots,
+  };
+}
+
+module.exports = {
+  // 常量
+  EPS: EPS,
+  DEFAULT_TUNING: DEFAULT_TUNING,
+  SAVE_CORRUPT: SAVE_CORRUPT,
+  SAVE_VERSION: SAVE_VERSION,
+  VISITOR_KINDS: VISITOR_KINDS,
+  VISITOR_LIFE_SEC: VISITOR_LIFE_SEC,
+  LETTER_STATES: LETTER_STATES,
+  LETTER_TEXT: LETTER_TEXT,
+  STARTER_GROWTH: STARTER_GROWTH,
+  SEASON_COUNT: SEASON_COUNT,
+  // 构造 / 配置
+  createState: createState,
+  normalizeTuning: normalizeTuning,
+  // 状态机
+  tick: tick,
+  harvest: harvest,
+  buy: buy,
+  claimVisitor: claimVisitor,
+  openLetter: openLetter,
+  finishLetter: finishLetter,
+  serialize: serialize,
+  deserialize: deserialize,
+  offlineGain: offlineGain,
+  offlineBreakdown: offlineBreakdown,
+  applyOffline: applyOffline,
+  markSeen: markSeen,
+  // 只读查询
+  costOf: costOf,
+  canAfford: canAfford,
+  passiveRate: passiveRate,
+  productionRate: productionRate,
+  harvestYield: harvestYield,
+  plotProgress: plotProgress,
+  plantStage: plantStage,
+  isMature: isMature,
+  phaseOf: phaseOf,
+  phaseRemainingSec: phaseRemainingSec,
+  cyclePeriodSec: cyclePeriodSec,
+  seasonOf: seasonOf,
+  seasonRemainingSec: seasonRemainingSec,
+  buffRemainingSec: buffRemainingSec,
+  visitorPresent: visitorPresent,
+  letterText: letterText,
+  letterMemories: letterMemories,
+  buildingOf: buildingOf,
+  buildingAt: buildingAt,
+  // 快照 / 投影
+  getState: getState,
+  getView: getView,
+  getSaveError: getSaveError,
+  getTuning: getTuning,
+};
+
+};
+__modules["render"] = function (module, exports, require) {
+'use strict';
+
+/**
+ * 庭院微光 · 桌面条（B1）· Canvas 渲染层
+ *
+ * 固定逻辑分辨率 1280×240：全部 UI（HUD / 按钮 / 弹窗）都画在这一块 canvas 上，
+ * 不创建任何 DOM 元素。render.js 只依赖 theme，不读 window/document（
+ * 唯一例外是可选的字形度量兜底，已做 typeof 保护）。
+ *
+ * 层级：天空（渐变/日月/云/远山/星星）→ 地面（草/小径/池塘）→ 种植槽 →
+ *       设施 → 访客 → 信封 → HUD → 提示/FX → 手写信/离线弹窗。
+ */
+
+const theme = require('./theme');
+
+const LOGICAL_WIDTH = 1280;
+const LOGICAL_HEIGHT = 240;
+const SKY_H = 132;
+const GROUND_TOP = 132;
+const PATH_TOP = 214;
+
+const PLOT_CENTERS = [70, 158, 246, 334, 422, 510];
+const FACILITY_CENTERS = [688, 806, 924, 1042];
+const FACILITY_IDS = ['plot', 'lantern', 'wheel', 'tower'];
+const FACILITY_NAMES = ['花圃', '灯笼', '水车', '石塔'];
+
+const clamp = theme.clamp;
+const withAlpha = theme.withAlpha;
+const mixHex = theme.mixHex;
+const hash2 = theme.hash2;
+const font = theme.font;
+
+// ---------------------------------------------------------------------------
+// 布局（固定 1280×240；坐标全部是逻辑像素）
+// ---------------------------------------------------------------------------
+
+function makeRect(x, y, w, h) {
+  return {
+    x: x,
+    y: y,
+    w: w,
+    h: h,
+    centerX: x + w / 2,
+    centerY: y + h / 2,
+  };
+}
+
+function computeLayout() {
+  const plots = [];
+  for (let i = 0; i < PLOT_CENTERS.length; i += 1) {
+    const cx = PLOT_CENTERS[i];
+    const rect = makeRect(cx - 34, 150, 68, 68);
+    plots.push({ index: i, cx: cx, rect: rect, centerX: rect.centerX, centerY: rect.centerY });
+  }
+  const facilities = [];
+  for (let i = 0; i < FACILITY_CENTERS.length; i += 1) {
+    const cx = FACILITY_CENTERS[i];
+    const rect = makeRect(cx - 42, 140, 84, 98);
+    facilities.push({
+      index: i,
+      id: FACILITY_IDS[i],
+      name: FACILITY_NAMES[i],
+      cx: cx,
+      rect: rect,
+      centerX: rect.centerX,
+      centerY: rect.centerY,
+    });
+  }
+  return {
+    width: LOGICAL_WIDTH,
+    height: LOGICAL_HEIGHT,
+    sky: makeRect(0, 0, LOGICAL_WIDTH, SKY_H),
+    ground: makeRect(0, GROUND_TOP, LOGICAL_WIDTH, LOGICAL_HEIGHT - GROUND_TOP),
+    hudLeft: makeRect(16, 10, 300, 44),
+    hudRight: makeRect(934, 10, 264, 44),
+    buff: makeRect(16, 58, 250, 26),
+    toast: makeRect(390, 14, 500, 34),
+    envelope: makeRect(1206, 56, 44, 34),
+    pond: makeRect(1120, 150, 146, 46),
+    visitorHome: { x: 595, y: 222, amplitude: 24 },
+    plots: plots,
+    facilities: facilities,
+    offline: {
+      panel: makeRect(340, 34, 600, 172),
+      button: makeRect(590, 152, 100, 34),
+    },
+    letter: {
+      panel: makeRect(330, 30, 620, 180),
+      close: makeRect(330, 30, 620, 180),
+    },
+  };
+}
+
+function pointIn(rect, x, y) {
+  return !!rect && x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
+}
+
+/** 访客的当帧位置（命中测试与绘制共用；由时间驱动，确定性）。 */
+function visitorRect(layout, timeSec) {
+  const home = layout.visitorHome;
+  const t = Number(timeSec) || 0;
+  const cx = home.x + Math.sin(t * 0.45) * home.amplitude;
+  const bob = Math.abs(Math.sin(t * 2.2)) * 2;
+  const rect = makeRect(cx - 26, 194 - bob, 52, 44);
+  return { rect: rect, cx: cx, cy: 232 - bob, bob: bob };
+}
+
+/**
+ * 画布命中测试。优先级：离线弹窗 > 手写信 > 信封 > 访客 > 种植槽 > 设施。
+ * @param {object} layout
+ * @param {number} x
+ * @param {number} y
+ * @param {object} [opts] { offline, letterOpen, envelope, visitor, timeSec }
+ * @returns {object|null} {type, index?, id?}
+ */
+function hitTest(layout, x, y, opts) {
+  const o = opts || {};
+  const px = Number(x);
+  const py = Number(y);
+  if (!layout || !Number.isFinite(px) || !Number.isFinite(py)) return null;
+
+  if (o.offline) {
+    if (pointIn(layout.offline.button, px, py)) return { type: 'offlineAccept' };
+    return { type: 'offlineBlock' };
+  }
+  if (o.letterOpen) return { type: 'letterClose' };
+  if (o.envelope && pointIn(layout.envelope, px, py)) return { type: 'envelope' };
+
+  if (o.visitor) {
+    const spot = visitorRect(layout, o.timeSec || 0);
+    if (pointIn(spot.rect, px, py)) return { type: 'visitor', kind: o.visitor.kind };
+  }
+  for (let i = 0; i < layout.plots.length; i += 1) {
+    if (pointIn(layout.plots[i].rect, px, py)) return { type: 'plot', index: i };
+  }
+  for (let i = 0; i < layout.facilities.length; i += 1) {
+    const facility = layout.facilities[i];
+    if (pointIn(facility.rect, px, py)) return { type: 'facility', index: i, id: facility.id };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// 基础绘制原语
+// ---------------------------------------------------------------------------
+
+function roundRectPath(ctx, x, y, w, h, r) {
+  const radius = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + w - radius, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+  ctx.lineTo(x + w, y + h - radius);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+  ctx.lineTo(x + radius, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+}
+
+function fillRoundRect(ctx, x, y, w, h, r, fillStyle) {
+  roundRectPath(ctx, x, y, w, h, r);
+  ctx.fillStyle = fillStyle;
+  ctx.fill();
+}
+
+function strokeRoundRect(ctx, x, y, w, h, r, strokeStyle, lineWidth) {
+  roundRectPath(ctx, x, y, w, h, r);
+  ctx.strokeStyle = strokeStyle;
+  ctx.lineWidth = lineWidth || 1;
+  ctx.stroke();
+}
+
+function fillCircle(ctx, cx, cy, r, fillStyle) {
+  ctx.beginPath();
+  ctx.arc(cx, cy, Math.max(0.1, r), 0, Math.PI * 2);
+  ctx.fillStyle = fillStyle;
+  ctx.fill();
+}
+
+function fillEllipse(ctx, cx, cy, rx, ry, fillStyle) {
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, Math.max(0.1, rx), Math.max(0.1, ry), 0, 0, Math.PI * 2);
+  ctx.fillStyle = fillStyle;
+  ctx.fill();
+}
+
+function safeGradient(ctx, kind, x0, y0, x1, y1, stops) {
+  let gradient = null;
+  try {
+    if (kind === 'radial') {
+      // 参数约定：x0,y0 = 圆心；x1 = 内半径；y1 = 外半径
+      const inner = Math.max(0, Math.min(Number(x1) || 0, Number(y1) || 0));
+      const outer = Math.max(1, Number(y1) || 0);
+      gradient = ctx.createRadialGradient(x0, y0, inner, x0, y0, outer);
+    } else {
+      gradient = ctx.createLinearGradient(x0, y0, x1, y1);
+    }
+  } catch (err) {
+    return null;
+  }
+  if (!gradient || typeof gradient.addColorStop !== 'function') return null;
+  for (let i = 0; i < stops.length; i += 1) gradient.addColorStop(clamp(stops[i][0], 0, 1), stops[i][1]);
+  return gradient;
+}
+
+function drawText(ctx, text, x, y, fontSpec, color, align, baseline) {
+  ctx.font = fontSpec;
+  ctx.fillStyle = color;
+  ctx.textAlign = align || 'left';
+  ctx.textBaseline = baseline || 'alphabetic';
+  ctx.fillText(String(text), x, y);
+}
+
+function measureText(ctx, text, fontSpec) {
+  if (fontSpec) ctx.font = fontSpec;
+  if (typeof ctx.measureText === 'function') {
+    const m = ctx.measureText(String(text));
+    if (m && Number.isFinite(m.width)) return m.width;
+  }
+  return String(text).length * 8;
+}
+
+/** 仅用于 2 行海报式排版的中文折行。 */
+function wrapText(ctx, text, maxWidth, fontSpec) {
+  const chars = String(text).split('');
+  const lines = [];
+  let line = '';
+  for (let i = 0; i < chars.length; i += 1) {
+    const next = line + chars[i];
+    if (line && measureText(ctx, next, fontSpec) > maxWidth) {
+      lines.push(line);
+      line = chars[i];
+    } else {
+      line = next;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
+// 天空
+// ---------------------------------------------------------------------------
+
+function drawStars(ctx, palette, time) {
+  for (let i = 0; i < 64; i += 1) {
+    const x = 20 + hash2(i, 1, 71) * (LOGICAL_WIDTH - 40);
+    const y = 10 + hash2(i, 2, 73) * 104;
+    const twinkle = 0.35 + 0.5 * Math.abs(Math.sin(time * 1.3 + i * 1.7));
+    const r = 0.7 + hash2(i, 3, 79) * 1.2;
+    ctx.globalAlpha = twinkle;
+    fillCircle(ctx, x, y, r, palette.star);
+    if (i % 11 === 0) {
+      ctx.strokeStyle = withAlpha(palette.star, 0.7);
+      ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(x - 3, y);
+      ctx.lineTo(x + 3, y);
+      ctx.moveTo(x, y - 3);
+      ctx.lineTo(x, y + 3);
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawSun(ctx, palette, progress) {
+  const x = 90 + (LOGICAL_WIDTH - 220) * progress;
+  const y = 112 - 88 * Math.sin(Math.PI * clamp(progress, 0, 1));
+  const r = 15;
+  const halo = safeGradient(ctx, 'radial', x, y, 0, r * 5.2, [
+    [0, withAlpha(palette.sunGlow, 0.5)],
+    [0.45, withAlpha(palette.sunGlow, 0.18)],
+    [1, withAlpha(palette.sunGlow, 0)],
+  ]);
+  if (halo) {
+    ctx.fillStyle = halo;
+    ctx.fillRect(x - r * 6, y - r * 6, r * 12, r * 12);
+  }
+  fillCircle(ctx, x, y, r, palette.sun);
+  fillCircle(ctx, x - r * 0.25, y - r * 0.3, r * 0.55, withAlpha(palette.paper, 0.28));
+  ctx.strokeStyle = withAlpha(palette.sun, 0.55);
+  ctx.lineWidth = 1.4;
+  for (let i = 0; i < 8; i += 1) {
+    const angle = (Math.PI * 2 * i) / 8 + 0.2;
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(angle) * r * 1.35, y + Math.sin(angle) * r * 1.35);
+    ctx.lineTo(x + Math.cos(angle) * r * 1.75, y + Math.sin(angle) * r * 1.75);
+    ctx.stroke();
+  }
+}
+
+function drawMoon(ctx, palette, progress) {
+  const x = 90 + (LOGICAL_WIDTH - 220) * progress;
+  const y = 108 - 82 * Math.sin(Math.PI * clamp(progress, 0, 1));
+  const r = 13;
+  const halo = safeGradient(ctx, 'radial', x, y, 0, r * 5.6, [
+    [0, withAlpha(palette.sunGlow, 0.32)],
+    [0.5, withAlpha(palette.sunGlow, 0.1)],
+    [1, withAlpha(palette.sunGlow, 0)],
+  ]);
+  if (halo) {
+    ctx.fillStyle = halo;
+    ctx.fillRect(x - r * 6, y - r * 6, r * 12, r * 12);
+  }
+  fillCircle(ctx, x, y, r, palette.sun);
+  fillCircle(ctx, x - r * 0.3, y - r * 0.2, r * 0.2, withAlpha(palette.paper, 0.22));
+  fillCircle(ctx, x + r * 0.22, y + r * 0.26, r * 0.14, withAlpha(palette.paper, 0.18));
+  fillCircle(ctx, x + r * 0.3, y - r * 0.34, r * 0.1, withAlpha(palette.paper, 0.16));
+}
+
+function drawClouds(ctx, palette, time, isNight) {
+  const alphaScale = isNight ? 0.55 : 1;
+  for (let i = 0; i < 4; i += 1) {
+    const speed = 5 + i * 2.4;
+    const baseX = hash2(i, 5, 17) * (LOGICAL_WIDTH + 320);
+    const x = ((baseX + time * speed) % (LOGICAL_WIDTH + 320)) - 160;
+    const y = 24 + hash2(i, 6, 19) * 54;
+    const scale = 0.65 + hash2(i, 7, 23) * 0.65;
+    ctx.globalAlpha = (0.5 + hash2(i, 8, 29) * 0.35) * alphaScale;
+    fillEllipse(ctx, x, y, 34 * scale, 11 * scale, palette.cloud);
+    fillEllipse(ctx, x + 24 * scale, y + 3 * scale, 24 * scale, 9 * scale, palette.cloud);
+    fillEllipse(ctx, x - 26 * scale, y + 4 * scale, 20 * scale, 8 * scale, palette.cloud);
+    fillEllipse(ctx, x + 4 * scale, y - 7 * scale, 22 * scale, 10 * scale, palette.cloud);
+    ctx.globalAlpha *= 0.45;
+    fillEllipse(ctx, x, y + 10 * scale, 30 * scale, 4 * scale, palette.shadow);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function hillPath(ctx, phase, amplitude, baseY) {
+  ctx.beginPath();
+  ctx.moveTo(-20, baseY + 30);
+  ctx.lineTo(-20, baseY);
+  const step = 170;
+  for (let x = -20; x <= LOGICAL_WIDTH + 20; x += step) {
+    const midX = x + step / 2;
+    const peak = baseY - amplitude * (0.55 + hash2(phase, Math.round(x / step), 31) * 0.9);
+    ctx.quadraticCurveTo(x + step * 0.25, peak, midX, baseY - amplitude * 0.25);
+    ctx.quadraticCurveTo(x + step * 0.75, baseY - amplitude * 0.75, x + step, baseY - amplitude * 0.12);
+  }
+  ctx.lineTo(LOGICAL_WIDTH + 20, baseY + 30);
+  ctx.closePath();
+}
+
+function drawHills(ctx, palette) {
+  // 远山：三层湿边水彩
+  const layers = [
+    { phase: 11, amplitude: 34, color: palette.hillFar, alpha: 0.5, y: SKY_H + 4 },
+    { phase: 23, amplitude: 26, color: palette.hillMid, alpha: 0.62, y: SKY_H + 8 },
+    { phase: 37, amplitude: 17, color: palette.hillNear, alpha: 0.72, y: SKY_H + 12 },
+  ];
+  for (let i = 0; i < layers.length; i += 1) {
+    const layer = layers[i];
+    ctx.globalAlpha = layer.alpha;
+    hillPath(ctx, layer.phase, layer.amplitude, layer.y);
+    ctx.fillStyle = layer.color;
+    ctx.fill();
+    // 湿边：峰值附近再压一层淡淡的深色
+    ctx.globalAlpha = layer.alpha * 0.35;
+    ctx.strokeStyle = mixHex(layer.color, palette.shadow, 0.35);
+    ctx.lineWidth = 2.2;
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // 山脊上的小树剪影
+  for (let i = 0; i < 12; i += 1) {
+    const x = 40 + hash2(i, 2, 41) * (LOGICAL_WIDTH - 80);
+    const baseY = SKY_H - 2 + hash2(i, 3, 43) * 6;
+    const h = 5 + hash2(i, 4, 47) * 5;
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = palette.hillNear;
+    ctx.beginPath();
+    ctx.moveTo(x - h * 0.4, baseY);
+    ctx.lineTo(x, baseY - h);
+    ctx.lineTo(x + h * 0.4, baseY);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---------------------------------------------------------------------------
+// 地面
+// ---------------------------------------------------------------------------
+
+function drawGround(ctx, layout, palette) {  const sky = safeGradient(ctx, 'linear', 0, GROUND_TOP, 0, LOGICAL_HEIGHT, [
+    [0, palette.groundEdge],
+    [0.16, palette.ground],
+    [0.68, palette.ground],
+    [1, palette.groundAlt],
+  ]);
+  ctx.fillStyle = sky || palette.ground;
+  ctx.fillRect(0, GROUND_TOP, LOGICAL_WIDTH, LOGICAL_HEIGHT - GROUND_TOP);
+
+  // 水彩晕染
+  for (let i = 0; i < 18; i += 1) {
+    const x = hash2(i, 1, 61) * LOGICAL_WIDTH;
+    const y = GROUND_TOP + 6 + hash2(i, 2, 67) * (LOGICAL_HEIGHT - GROUND_TOP - 10);
+    const rx = 26 + hash2(i, 3, 71) * 78;
+    const ry = 4 + hash2(i, 4, 73) * 12;
+    ctx.globalAlpha = 0.04 + hash2(i, 5, 79) * 0.05;
+    fillEllipse(ctx, x, y, rx, ry, i % 3 === 0 ? palette.paper : i % 3 === 1 ? palette.groundEdge : palette.waterSheen);
+  }
+  ctx.globalAlpha = 1;
+
+  // 小径
+  const path = safeGradient(ctx, 'linear', 0, PATH_TOP, 0, LOGICAL_HEIGHT, [
+    [0, withAlpha(palette.groundEdge, 0.55)],
+    [0.4, withAlpha(palette.paper, 0.5)],
+    [1, withAlpha(palette.groundEdge, 0.65)],
+  ]);
+  if (path) {
+    ctx.fillStyle = path;
+    ctx.beginPath();
+    ctx.moveTo(0, PATH_TOP + 4);
+    for (let x = 0; x <= LOGICAL_WIDTH; x += 80) {
+      ctx.quadraticCurveTo(x + 40, PATH_TOP - 3 + hash2(x, 1, 83) * 7, x + 80, PATH_TOP + 3);
+    }
+    ctx.lineTo(LOGICAL_WIDTH, LOGICAL_HEIGHT);
+    ctx.lineTo(0, LOGICAL_HEIGHT);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // 小径碎石
+  for (let i = 0; i < 44; i += 1) {
+    const x = 10 + hash2(i, 7, 89) * (LOGICAL_WIDTH - 20);
+    const y = PATH_TOP + 8 + hash2(i, 8, 97) * 20;
+    ctx.globalAlpha = 0.18 + hash2(i, 9, 101) * 0.18;
+    fillEllipse(ctx, x, y, 1.4 + hash2(i, 10, 103) * 2.4, 0.8, palette.inkFaint);
+  }
+  ctx.globalAlpha = 1;
+
+  // 草叶
+  ctx.strokeStyle = palette.grass;
+  for (let i = 0; i < 96; i += 1) {
+    const x = hash2(i, 11, 107) * LOGICAL_WIDTH;
+    const y = GROUND_TOP + 6 + hash2(i, 12, 109) * (PATH_TOP - GROUND_TOP - 8);
+    const h = 3 + hash2(i, 13, 113) * 6;
+    ctx.globalAlpha = 0.22 + hash2(i, 14, 127) * 0.3;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.quadraticCurveTo(x + (hash2(i, 15, 131) - 0.5) * 4, y - h * 0.6, x + (hash2(i, 16, 137) - 0.5) * 6, y - h);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // 右侧池塘
+  const pond = layout.pond;
+  const pcx = pond.centerX;
+  const pcy = pond.centerY;
+  fillEllipse(ctx, pcx, pcy, pond.w / 2, pond.h / 2, withAlpha(palette.water, 0.85));
+  const sheen = safeGradient(ctx, 'radial', pcx, pcy, 0, pond.w / 2, [
+    [0, withAlpha(palette.waterSheen, 0.75)],
+    [1, withAlpha(palette.waterSheen, 0)],
+  ]);
+  if (sheen) {
+    ctx.fillStyle = sheen;
+    ctx.beginPath();
+    ctx.ellipse(pcx, pcy, pond.w / 2, pond.h / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.strokeStyle = withAlpha(palette.waterSheen, 0.8);
+  ctx.lineWidth = 1.2;
+  for (let i = 0; i < 3; i += 1) {
+    ctx.beginPath();
+    ctx.ellipse(pcx - 18 + i * 16, pcy - 2 + i * 5, 14 - i * 3, 3, 0, Math.PI * 0.1, Math.PI * 0.9);
+    ctx.stroke();
+  }
+  // 芦苇
+  ctx.strokeStyle = palette.leaf;
+  ctx.lineWidth = 1.4;
+  for (let i = 0; i < 6; i += 1) {
+    const x = 1112 + i * 5;
+    const y = 190 - i * 2;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.quadraticCurveTo(x + 2, y - 12, x + (i % 2 === 0 ? 6 : -3), y - 22);
+    ctx.stroke();
+  }
+
+  // 远景树丛：给地平线一点层次（绘制在地面层，永远在玩法物件之后被绘制）
+  for (let i = 0; i < 5; i += 1) {
+    const x = 80 + hash2(i, 31, 151) * (LOGICAL_WIDTH - 160);
+    const baseY = GROUND_TOP + 3;
+    const h = 30 + hash2(i, 32, 157) * 22;
+    const r = 10 + hash2(i, 33, 163) * 7;
+    ctx.globalAlpha = 0.32;
+    ctx.strokeStyle = palette.woodDark;
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.moveTo(x, baseY);
+    ctx.lineTo(x, baseY - h * 0.62);
+    ctx.stroke();
+    fillEllipse(ctx, x, baseY - h * 0.7, r * 1.15, r * 0.8, palette.hillNear);
+    fillEllipse(ctx, x - r * 0.62, baseY - h * 0.55, r * 0.72, r * 0.58, palette.leaf);
+    fillEllipse(ctx, x + r * 0.55, baseY - h * 0.62, r * 0.66, r * 0.52, palette.hillMid);
+  }
+  ctx.globalAlpha = 1;
+
+  // 地平线上的灌木
+  for (let i = 0; i < 9; i += 1) {
+    const x = 28 + hash2(i, 21, 139) * (LOGICAL_WIDTH - 56);
+    const y = GROUND_TOP + 2;
+    const r = 6 + hash2(i, 22, 149) * 8;
+    ctx.globalAlpha = 0.55;
+    fillEllipse(ctx, x, y, r, r * 0.55, palette.hillNear);
+    fillEllipse(ctx, x - r * 0.5, y + 1, r * 0.55, r * 0.4, palette.leaf);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---------------------------------------------------------------------------
+// 静态地形缓存：远山 + 地面（水彩笔触是每帧大头，按色板缓存成离屏图）
+// ---------------------------------------------------------------------------
+
+const TERRAIN_CACHE = new Map();
+const TERRAIN_CACHE_LIMIT = 4;
+const TERRAIN_SCALE = 2;
+
+function paintTerrain(ctx, layout, palette) {
+  drawHills(ctx, palette);
+  drawGround(ctx, layout, palette);
+}
+
+/** 无 document 时返回 null（Node 测试/兜底绘制直接走即时绘制）。 */
+function getTerrain(palette, layout) {
+  if (palette.key && palette.key.indexOf('>') !== -1) return null; // 昼夜过渡的混合色板不缓存
+  if (typeof document === 'undefined' || !document || typeof document.createElement !== 'function') return null;
+  const cached = TERRAIN_CACHE.get(palette.key);
+  if (cached) return cached;
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = LOGICAL_WIDTH * TERRAIN_SCALE;
+    canvas.height = LOGICAL_HEIGHT * TERRAIN_SCALE;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.setTransform(TERRAIN_SCALE, 0, 0, TERRAIN_SCALE, 0, 0);
+    paintTerrain(ctx, layout, palette);
+    if (TERRAIN_CACHE.size >= TERRAIN_CACHE_LIMIT) {
+      const oldest = TERRAIN_CACHE.keys().next();
+      if (!oldest.done) TERRAIN_CACHE.delete(oldest.value);
+    }
+    TERRAIN_CACHE.set(palette.key, canvas);
+    return canvas;
+  } catch (err) {
+    return null;
+  }
+}
+
+function drawTerrain(ctx, layout, palette) {
+  const cached = getTerrain(palette, layout);
+  if (cached) {
+    ctx.drawImage(cached, 0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+  } else {
+    paintTerrain(ctx, layout, palette);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 种植槽与植物
+// ---------------------------------------------------------------------------
+
+function drawLeaf(ctx, x, y, angle, length, width, color) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.quadraticCurveTo(length * 0.55, -width, length, 0);
+  ctx.quadraticCurveTo(length * 0.55, width, 0, 0);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawPlot(ctx, layout, palette, plotView, time) {
+  const index = plotView.index;
+  const cx = PLOT_CENTERS[index];
+  const baseY = 205;
+  const progress = clamp(plotView.progress, 0, 1);
+  const stage = plotView.stage;
+  const sway = Math.sin(time * 1.5 + index * 0.9) * 1.4;
+
+  // 土壤
+  fillEllipse(ctx, cx, baseY + 2, 31, 8.5, withAlpha(palette.soilDark, 0.4));
+  fillEllipse(ctx, cx, baseY, 30, 8, palette.soil);
+  fillEllipse(ctx, cx - 5, baseY - 2, 18, 4, withAlpha(palette.soilDark, 0.35));
+  // 土粒
+  for (let i = 0; i < 5; i += 1) {
+    ctx.globalAlpha = 0.3;
+    fillCircle(ctx, cx - 20 + i * 9, baseY - 1 + (i % 2), 1, palette.soilDark);
+  }
+  ctx.globalAlpha = 1;
+
+  // 生长进度条（在土前缘）
+  const barW = 36;
+  fillRoundRect(ctx, cx - barW / 2, baseY + 10, barW, 3, 1.5, withAlpha(palette.ink, 0.16));
+  if (progress > 0) {
+    fillRoundRect(
+      ctx,
+      cx - barW / 2,
+      baseY + 10,
+      Math.max(1.4, barW * progress),
+      3,
+      1.5,
+      stage === 2 ? palette.flowerCore : palette.leafLight
+    );
+  }
+
+  if (stage === 2) {
+    // 成熟：暖光 + 光点 + 露水提示
+    const pulse = 0.55 + 0.45 * Math.sin(time * 2.4 + index);
+    const glow = safeGradient(ctx, 'radial', cx, 178, 0, 30, [
+      [0, withAlpha(palette.glow, 0.32 * pulse)],
+      [0.6, withAlpha(palette.flowerAlt, 0.12)],
+      [1, withAlpha(palette.glow, 0)],
+    ]);
+    if (glow) {
+      ctx.fillStyle = glow;
+      ctx.fillRect(cx - 32, 146, 64, 64);
+    }
+    for (let i = 0; i < 3; i += 1) {
+      const a = time * 1.1 + i * 2.1 + index;
+      const sx = cx + Math.cos(a) * 16;
+      const sy = 172 + Math.sin(a * 1.4) * 8;
+      ctx.globalAlpha = 0.35 + 0.35 * Math.sin(time * 2 + i);
+      fillCircle(ctx, sx, sy, 1.2, palette.paper);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // 茎 + 叶
+  const stemTop = stage === 0 ? baseY - 9 : stage === 1 ? baseY - 20 : baseY - 27;
+  ctx.strokeStyle = palette.leaf;
+  ctx.lineWidth = stage === 0 ? 1.8 : stage === 1 ? 2.2 : 2.6;
+  ctx.beginPath();
+  ctx.moveTo(cx, baseY);
+  ctx.quadraticCurveTo(cx + sway * 0.4, (baseY + stemTop) / 2, cx + sway, stemTop);
+  ctx.stroke();
+
+  if (stage === 0) {
+    drawLeaf(ctx, cx + sway * 0.5, stemTop + 2, -0.75, 8, 3, palette.leafLight);
+    drawLeaf(ctx, cx - sway * 0.3, stemTop + 3, Math.PI + 0.65, 7.5, 2.8, palette.leaf);
+  } else if (stage === 1) {
+    drawLeaf(ctx, cx, baseY - 6, -0.62, 12, 3.8, palette.leafLight);
+    drawLeaf(ctx, cx, baseY - 11, Math.PI + 0.55, 13, 4, palette.leaf);
+    drawLeaf(ctx, cx + sway * 0.6, stemTop + 4, -0.95, 10, 3.4, palette.leafLight);
+    drawLeaf(ctx, cx + sway * 0.2, baseY - 16, -0.35, 8, 2.8, palette.leaf);
+  } else {
+    drawLeaf(ctx, cx, baseY - 8, -0.55, 14, 4.2, palette.leafLight);
+    drawLeaf(ctx, cx, baseY - 14, Math.PI + 0.5, 15, 4.4, palette.leaf);
+    drawLeaf(ctx, cx + sway * 0.5, stemTop + 8, -1.05, 10, 3.4, palette.leafLight);
+    // 花头
+    const fx = cx + sway;
+    const fy = stemTop - 2;
+    for (let i = 0; i < 5; i += 1) {
+      const angle = (Math.PI * 2 * i) / 5 + 0.3 + index * 0.2;
+      fillEllipse(
+        ctx,
+        fx + Math.cos(angle) * 7.2,
+        fy + Math.sin(angle) * 7.2,
+        6,
+        4.8,
+        i % 2 === 0 ? palette.flower : palette.flowerAlt
+      );
+    }
+    fillCircle(ctx, fx, fy, 3.9, palette.flowerCore);
+    fillCircle(ctx, fx - 1, fy - 1, 1.3, withAlpha(palette.paper, 0.65));
+    // 旁边的小花苞
+    fillCircle(ctx, cx + sway - 9, stemTop + 5, 2.4, palette.flowerAlt);
+    // 可收获的露水标记
+    const bob = Math.sin(time * 2 + index) * 1.6;
+    drawDewDrop(ctx, cx + sway, 152 + bob, 4.6, palette, 0.9);
+  }
+}
+
+function drawDewDrop(ctx, cx, cy, size, palette, alpha) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - size);
+  ctx.quadraticCurveTo(cx + size * 0.85, cy + size * 0.2, cx, cy + size * 0.9);
+  ctx.quadraticCurveTo(cx - size * 0.85, cy + size * 0.2, cx, cy - size);
+  ctx.closePath();
+  ctx.fillStyle = palette.waterSheen;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(palette.water, 0.8);
+  ctx.lineWidth = 0.9;
+  ctx.stroke();
+  fillCircle(ctx, cx - size * 0.22, cy + size * 0.1, size * 0.18, withAlpha(palette.paper, 0.9));
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// 设施（4 类 × 等级外观）
+// ---------------------------------------------------------------------------
+
+function drawFlowerBed(ctx, palette, cx, baseY, level, time) {
+  fillEllipse(ctx, cx, baseY, 36, 9, withAlpha(palette.soilDark, 0.4));
+  fillEllipse(ctx, cx, baseY - 1, 34, 8, palette.soil);
+  const count = Math.min(12, 3 + level);
+  for (let i = 0; i < count; i += 1) {
+    const spread = ((i + 0.5) / count) * 2 - 1;
+    const x = cx + spread * 27;
+    const y = baseY - 3 + Math.abs(spread) * 3 + Math.sin(time * 1.4 + i) * 0.8;
+    const color = i % 3 === 0 ? palette.flower : i % 3 === 1 ? palette.flowerAlt : palette.flowerCore;
+    ctx.strokeStyle = palette.leaf;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y - 7);
+    ctx.stroke();
+    for (let p = 0; p < 3; p += 1) {
+      const angle = (Math.PI * 2 * p) / 3 + i;
+      fillCircle(ctx, x + Math.cos(angle) * 2.1, y - 8 + Math.sin(angle) * 2.1, 2.1, color);
+    }
+    fillCircle(ctx, x, y - 8, 1.3, palette.flowerCore);
+  }
+}
+
+function drawLanternBuilding(ctx, palette, cx, baseY, level, time, isNight) {
+  // 石座
+  fillEllipse(ctx, cx, baseY + 1, 26, 6, withAlpha(palette.shadow, 0.28));
+  fillRoundRect(ctx, cx - 17, baseY - 8, 34, 9, 3, palette.stoneDark);
+  fillRoundRect(ctx, cx - 12, baseY - 24, 24, 17, 2.5, palette.stone);
+  fillRoundRect(ctx, cx - 8, baseY - 33, 16, 10, 2, palette.stoneLight);
+  // 灯室
+  const lampY = baseY - 52;
+  if (isNight) {
+    const radius = 40 + level * 5;
+    const glow = safeGradient(ctx, 'radial', cx, lampY, 0, radius, [
+      [0, withAlpha(palette.glow, 0.5)],
+      [0.45, withAlpha(palette.lanternLight, 0.2)],
+      [1, withAlpha(palette.lanternLight, 0)],
+    ]);
+    if (glow) {
+      ctx.fillStyle = glow;
+      ctx.fillRect(cx - radius, lampY - radius, radius * 2, radius * 2);
+    }
+  }
+  fillRoundRect(ctx, cx - 13, lampY - 12, 26, 24, 4, isNight ? palette.lanternLight : palette.lanternStone);
+  ctx.strokeStyle = withAlpha(palette.woodDark, 0.75);
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(cx - 13, lampY - 2);
+  ctx.lineTo(cx + 13, lampY - 2);
+  ctx.moveTo(cx, lampY - 12);
+  ctx.lineTo(cx, lampY + 12);
+  ctx.stroke();
+  fillRoundRect(ctx, cx - 18, lampY - 17, 36, 5, 2, palette.woodDark);
+  fillRoundRect(ctx, cx - 15, lampY + 12, 30, 4, 2, palette.woodDark);
+  if (isNight) {
+    const flicker = 0.75 + 0.25 * Math.sin(time * 7 + cx);
+    fillCircle(ctx, cx, lampY, 3.4 * flicker, palette.flame);
+    // 侧灯笼（等级 ≥ 2）
+    if (level >= 2) {
+      for (let side = -1; side <= 1; side += 2) {
+        const sx = cx + side * 30;
+        const sy = lampY + 6;
+        ctx.strokeStyle = palette.woodDark;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(cx + side * 14, lampY - 16);
+        ctx.lineTo(sx, sy - 10);
+        ctx.stroke();
+        fillRoundRect(ctx, sx - 6, sy - 8, 12, 15, 3, palette.lanternLight);
+        fillCircle(ctx, sx, sy, 2.1, palette.flame);
+      }
+    }
+    if (level >= 4) {
+      fillEllipse(ctx, cx, baseY - 1, 20, 4, withAlpha(palette.lanternLight, 0.35));
+    }
+  }
+}
+
+function drawWheelBuilding(ctx, palette, cx, baseY, level, time) {
+  const radius = Math.min(30, 20 + level * 1.2);
+  const cy = baseY - radius - 4;
+  const rotation = time * (0.35 + level * 0.12);
+  // 水盆
+  fillEllipse(ctx, cx, baseY + 2, 36, 8, withAlpha(palette.water, 0.55));
+  fillEllipse(ctx, cx, baseY + 2, 32, 6, withAlpha(palette.waterSheen, 0.35));
+  // 支架
+  ctx.strokeStyle = palette.woodDark;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(cx - radius * 0.8, baseY);
+  ctx.lineTo(cx, cy);
+  ctx.moveTo(cx + radius * 0.8, baseY);
+  ctx.lineTo(cx, cy);
+  ctx.stroke();
+  // 水轮
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rotation);
+  ctx.strokeStyle = palette.wood;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 8; i += 1) {
+    const angle = (Math.PI * 2 * i) / 8;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(angle) * radius, Math.sin(angle) * radius);
+    ctx.stroke();
+    // 水斗
+    fillRoundRect(
+      ctx,
+      Math.cos(angle) * radius - 2.5,
+      Math.sin(angle) * radius - 2.5,
+      5,
+      5,
+      1.5,
+      withAlpha(palette.waterSheen, 0.55)
+    );
+  }
+  fillCircle(ctx, 0, 0, 4, palette.woodDark);
+  ctx.restore();
+  // 水花
+  ctx.strokeStyle = withAlpha(palette.waterSheen, 0.8);
+  ctx.lineWidth = 1.2;
+  for (let i = 0; i < 3; i += 1) {
+    const a = time * 2 + i * 1.6;
+    ctx.beginPath();
+    ctx.arc(cx + 10, baseY - 2, 5 + i * 3, Math.PI * 0.2 + a * 0.1, Math.PI * 0.65 + a * 0.1);
+    ctx.stroke();
+  }
+}
+
+function drawTowerBuilding(ctx, palette, cx, baseY, level, time, isNight) {
+  const tiers = Math.min(5, 2 + Math.floor(level / 2));
+  const tierH = 11;
+  fillEllipse(ctx, cx, baseY + 1, 24, 6, withAlpha(palette.shadow, 0.3));
+  for (let i = 0; i < tiers; i += 1) {
+    const half = 22 - i * 3.2;
+    const y = baseY - (i + 1) * tierH;
+    fillRoundRect(
+      ctx,
+      cx - half,
+      y,
+      half * 2,
+      tierH + 1,
+      2.5,
+      i % 2 === 0 ? palette.stone : palette.stoneLight
+    );
+    ctx.strokeStyle = withAlpha(palette.stoneDark, 0.55);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx - half, y + tierH);
+    ctx.lineTo(cx + half, y + tierH);
+    ctx.stroke();
+    if (i < tiers - 1) {
+      fillRoundRect(ctx, cx - half - 3, y - 2, half * 2 + 6, 3, 1.5, palette.stoneDark);
+    }
+  }
+  const roofY = baseY - tiers * tierH;
+  ctx.fillStyle = palette.stoneDark;
+  ctx.beginPath();
+  ctx.moveTo(cx - 16, roofY);
+  ctx.lineTo(cx, roofY - 13);
+  ctx.lineTo(cx + 16, roofY);
+  ctx.closePath();
+  ctx.fill();
+  fillCircle(ctx, cx, roofY - 16, 2, palette.stoneLight);
+  if (isNight && level >= 1) {
+    const glow = safeGradient(ctx, 'radial', cx, baseY - tierH * 0.8, 0, 22 + level * 2, [
+      [0, withAlpha(palette.lanternLight, 0.35)],
+      [1, withAlpha(palette.lanternLight, 0)],
+    ]);
+    if (glow) {
+      ctx.fillStyle = glow;
+      ctx.fillRect(cx - 40, baseY - 60, 80, 70);
+    }
+    fillRoundRect(ctx, cx - 3, baseY - tierH * 0.9, 6, 7, 1.5, palette.lanternLight);
+  }
+}
+
+function drawFacilityLabel(ctx, palette, facility, buildingView, time) {
+  const x = facility.cx - 42;
+  const y = 220;
+  fillRoundRect(ctx, x, y, 84, 17, 5, withAlpha(palette.panel, 0.82));
+  strokeRoundRect(ctx, x + 0.5, y + 0.5, 83, 16, 5, withAlpha(palette.panelEdge, 0.7), 1);
+  drawText(
+    ctx,
+    buildingView.name + ' Lv.' + buildingView.level,
+    x + 8,
+    y + 12.5,
+    font(10, 600),
+    palette.ink,
+    'left',
+    'alphabetic'
+  );
+  const color = buildingView.affordable ? palette.accent : palette.inkFaint;
+  drawText(ctx, theme.formatDew(buildingView.cost), x + 76, y + 12.5, font(10, 600), color, 'right', 'alphabetic');
+}
+
+function drawFacility(ctx, layout, palette, index, buildingView, time, isNight) {
+  const facility = layout.facilities[index];
+  const cx = facility.cx;
+  const baseY = 210;
+  if (facility.id === 'plot') drawFlowerBed(ctx, palette, cx, baseY, buildingView.level, time);
+  else if (facility.id === 'lantern') drawLanternBuilding(ctx, palette, cx, baseY, buildingView.level, time, isNight);
+  else if (facility.id === 'wheel') drawWheelBuilding(ctx, palette, cx, baseY, buildingView.level, time);
+  else drawTowerBuilding(ctx, palette, cx, baseY, buildingView.level, time, isNight);
+  drawFacilityLabel(ctx, palette, facility, buildingView, time);
+}
+
+// ---------------------------------------------------------------------------
+// 访客（鸟 / 猫 / 兔）
+// ---------------------------------------------------------------------------
+
+function drawBird(ctx, palette, cx, baseY, time) {
+  const hop = Math.abs(Math.sin(time * 3.2)) * 3;
+  const y = baseY - hop;
+  fillEllipse(ctx, cx, baseY + 2, 13, 3.5, withAlpha(palette.shadow, 0.22));
+  // 尾
+  ctx.fillStyle = palette.stoneDark;
+  ctx.beginPath();
+  ctx.moveTo(cx + 7, y - 9);
+  ctx.lineTo(cx + 17, y - 14);
+  ctx.lineTo(cx + 12, y - 6);
+  ctx.closePath();
+  ctx.fill();
+  // 身体
+  fillEllipse(ctx, cx, y - 9, 11, 7.5, withAlpha(palette.stone, 0.95));
+  fillEllipse(ctx, cx - 2, y - 10, 7, 5, palette.stoneLight);
+  // 头
+  fillCircle(ctx, cx - 8, y - 17, 5.4, palette.stoneLight);
+  // 喙
+  ctx.fillStyle = palette.accentWarm;
+  ctx.beginPath();
+  ctx.moveTo(cx - 13, y - 17);
+  ctx.lineTo(cx - 18, y - 15);
+  ctx.lineTo(cx - 13, y - 14);
+  ctx.closePath();
+  ctx.fill();
+  // 眼睛
+  fillCircle(ctx, cx - 9.5, y - 18, 1.1, palette.ink);
+  // 翅膀
+  ctx.strokeStyle = withAlpha(palette.stoneDark, 0.8);
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.arc(cx + 1, y - 10, 6, -0.4, 1.1);
+  ctx.stroke();
+  // 腿
+  ctx.strokeStyle = palette.accentWarm;
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.moveTo(cx - 2, y - 2);
+  ctx.lineTo(cx - 2, baseY);
+  ctx.moveTo(cx + 3, y - 2);
+  ctx.lineTo(cx + 3, baseY);
+  ctx.stroke();
+}
+
+function drawCat(ctx, palette, cx, baseY, time) {
+  const breathe = Math.sin(time * 1.8) * 0.8;
+  fillEllipse(ctx, cx, baseY + 2, 15, 4, withAlpha(palette.shadow, 0.22));
+  // 尾巴
+  ctx.strokeStyle = palette.accentWarm;
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx + 9, baseY - 4);
+  ctx.quadraticCurveTo(cx + 20, baseY - 8 + Math.sin(time * 1.2) * 3, cx + 16, baseY - 20);
+  ctx.stroke();
+  ctx.lineCap = 'butt';
+  // 身体
+  fillEllipse(ctx, cx, baseY - 9 + breathe * 0.2, 12, 10 + breathe, withAlpha(palette.accentWarm, 0.9));
+  fillEllipse(ctx, cx - 2, baseY - 7, 7, 5, withAlpha(palette.flowerCore, 0.28));
+  // 头
+  fillCircle(ctx, cx - 6, baseY - 22 + breathe, 7.4, palette.accentWarm);
+  // 耳朵
+  ctx.fillStyle = palette.accentWarm;
+  ctx.beginPath();
+  ctx.moveTo(cx - 11, baseY - 27 + breathe);
+  ctx.lineTo(cx - 9, baseY - 34 + breathe);
+  ctx.lineTo(cx - 5, baseY - 28 + breathe);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx - 3, baseY - 28 + breathe);
+  ctx.lineTo(cx + 1, baseY - 34 + breathe);
+  ctx.lineTo(cx + 3, baseY - 27 + breathe);
+  ctx.closePath();
+  ctx.fill();
+  // 眼睛 + 鼻子
+  fillCircle(ctx, cx - 8.5, baseY - 22 + breathe, 1.1, palette.ink);
+  fillCircle(ctx, cx - 3.5, baseY - 22 + breathe, 1.1, palette.ink);
+  fillCircle(ctx, cx - 6, baseY - 19.5 + breathe, 1.1, palette.flower);
+  // 胡须
+  ctx.strokeStyle = withAlpha(palette.paper, 0.75);
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(cx - 9, baseY - 19 + breathe);
+  ctx.lineTo(cx - 15, baseY - 18 + breathe);
+  ctx.moveTo(cx - 3, baseY - 19 + breathe);
+  ctx.lineTo(cx + 3, baseY - 18 + breathe);
+  ctx.stroke();
+}
+
+function drawRabbit(ctx, palette, cx, baseY, time) {
+  const breathe = Math.sin(time * 2.1) * 0.9;
+  fillEllipse(ctx, cx, baseY + 2, 13, 3.6, withAlpha(palette.shadow, 0.22));
+  // 身体
+  fillEllipse(ctx, cx, baseY - 8 + breathe * 0.2, 11, 9, palette.paper);
+  fillEllipse(ctx, cx - 2, baseY - 6, 6, 4.5, withAlpha(palette.flowerAlt, 0.25));
+  // 头
+  fillCircle(ctx, cx - 5, baseY - 20 + breathe, 7, palette.paper);
+  // 长耳朵
+  ctx.save();
+  ctx.translate(cx - 8, baseY - 25 + breathe);
+  ctx.rotate(-0.18);
+  fillEllipse(ctx, 0, -6, 3.2, 9, palette.paper);
+  fillEllipse(ctx, 0, -6, 1.6, 6, withAlpha(palette.flowerAlt, 0.6));
+  ctx.restore();
+  ctx.save();
+  ctx.translate(cx + 1, baseY - 26 + breathe);
+  ctx.rotate(0.12);
+  fillEllipse(ctx, 0, -6, 3.2, 9, palette.paper);
+  fillEllipse(ctx, 0, -6, 1.6, 6, withAlpha(palette.flowerAlt, 0.6));
+  ctx.restore();
+  // 眼睛/鼻子
+  fillCircle(ctx, cx - 7.5, baseY - 21 + breathe, 1, palette.ink);
+  fillCircle(ctx, cx - 2.5, baseY - 21 + breathe, 1, palette.ink);
+  fillCircle(ctx, cx - 5, baseY - 18 + breathe, 1, palette.flower);
+  // 尾巴
+  fillCircle(ctx, cx + 9, baseY - 6, 2.6, palette.paper);
+}
+
+function drawVisitor(ctx, layout, palette, view, time) {
+  const spot = visitorRect(layout, time);
+  const kind = view.visitor.kind;
+  // 可点击提示：上方的小种子
+  const pulse = 0.6 + 0.4 * Math.sin(time * 3);
+  const sx = spot.cx;
+  const sy = spot.cy - 44 + Math.sin(time * 2) * 2;
+  ctx.globalAlpha = 0.75 * pulse;
+  fillCircle(ctx, sx, sy, 7, withAlpha(palette.buffGlow, 0.7));
+  ctx.globalAlpha = 1;
+  fillEllipse(ctx, sx, sy + 1.5, 3, 4.2, palette.accentWarm);
+  fillEllipse(ctx, sx - 1, sy, 1.2, 2, withAlpha(palette.paper, 0.6));
+  drawText(ctx, '?', sx + 9, sy + 4, font(10, 700), withAlpha(palette.ink, 0.65), 'center', 'alphabetic');
+
+  if (kind === 'bird') drawBird(ctx, palette, spot.cx, spot.cy, time);
+  else if (kind === 'cat') drawCat(ctx, palette, spot.cx, spot.cy, time);
+  else drawRabbit(ctx, palette, spot.cx, spot.cy, time);
+}
+
+// ---------------------------------------------------------------------------
+// 信封
+// ---------------------------------------------------------------------------
+
+function drawEnvelope(ctx, layout, palette, time) {
+  const rect = layout.envelope;
+  const cx = rect.centerX;
+  const cy = rect.centerY;
+  const pulse = 0.55 + 0.45 * Math.sin(time * 2.6);
+  const glow = safeGradient(ctx, 'radial', cx, cy, 0, 40, [
+    [0, withAlpha(palette.buffGlow, 0.35 * pulse)],
+    [1, withAlpha(palette.buffGlow, 0)],
+  ]);
+  if (glow) {
+    ctx.fillStyle = glow;
+    ctx.fillRect(cx - 42, cy - 42, 84, 84);
+  }
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(-0.05);
+  fillRoundRect(ctx, -18, -13, 36, 26, 3, palette.paper);
+  ctx.strokeStyle = withAlpha(palette.panelEdge, 0.95);
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(-18, -13);
+  ctx.lineTo(0, 2);
+  ctx.lineTo(18, -13);
+  ctx.stroke();
+  fillCircle(ctx, 0, 2, 5, palette.accentWarm);
+  fillCircle(ctx, 0, 2, 2.2, withAlpha(palette.paper, 0.6));
+  ctx.restore();
+  // 抖动提示
+  drawText(ctx, '信', cx, cy + 27, font(9, 600), withAlpha(palette.ink, 0.55), 'center', 'alphabetic');
+}
+
+// ---------------------------------------------------------------------------
+// HUD
+// ---------------------------------------------------------------------------
+
+function drawHud(ctx, layout, palette, view, time) {
+  const left = layout.hudLeft;
+  // 左：季节 / 昼夜
+  fillRoundRect(ctx, left.x + 2, left.y + 3, left.w, left.h, 13, withAlpha(palette.shadow, 0.1));
+  fillRoundRect(ctx, left.x, left.y, left.w, left.h, 13, withAlpha(palette.panel, 0.88));
+  strokeRoundRect(ctx, left.x + 0.5, left.y + 0.5, left.w - 1, left.h - 1, 12.5, withAlpha(palette.panelEdge, 0.8), 1);
+
+  const iconCx = left.x + 24;
+  const iconCy = left.y + 22;
+  if (view.phase === 'day') {
+    fillCircle(ctx, iconCx, iconCy, 7, palette.sun);
+    ctx.strokeStyle = withAlpha(palette.sun, 0.8);
+    ctx.lineWidth = 1.2;
+    for (let i = 0; i < 8; i += 1) {
+      const a = (Math.PI * 2 * i) / 8;
+      ctx.beginPath();
+      ctx.moveTo(iconCx + Math.cos(a) * 9, iconCy + Math.sin(a) * 9);
+      ctx.lineTo(iconCx + Math.cos(a) * 12, iconCy + Math.sin(a) * 12);
+      ctx.stroke();
+    }
+  } else {
+    fillCircle(ctx, iconCx, iconCy, 7.5, palette.sun);
+    fillCircle(ctx, iconCx - 3, iconCy - 2, 6, withAlpha(palette.panel, 0.92));
+  }
+  drawText(
+    ctx,
+    view.seasonName + ' · ' + (view.phase === 'day' ? '白天' : '夜晚'),
+    left.x + 46,
+    left.y + 20,
+    font(15, 700),
+    palette.ink,
+    'left',
+    'alphabetic'
+  );
+  drawText(
+    ctx,
+    (view.phase === 'day' ? '夜晚' : '白天') + ' ' + theme.formatCountdown(view.phaseRemainingSec) + ' 后',
+    left.x + 46,
+    left.y + 37,
+    font(10, 400),
+    palette.inkSoft,
+    'left',
+    'alphabetic'
+  );
+  // 昼夜进度条
+  const barX = left.x + 188;
+  const barY = left.y + 31;
+  const barW = 100;
+  drawText(ctx, '昼夜', barX, left.y + 20, font(9, 400), palette.inkFaint, 'left', 'alphabetic');
+  fillRoundRect(ctx, barX, barY, barW, 6, 3, withAlpha(palette.ink, 0.14));
+  const seg = barW * clamp(view.phaseProgress, 0, 1);
+  fillRoundRect(ctx, barX, barY, Math.max(2, seg), 6, 3, view.phase === 'day' ? palette.accentWarm : palette.accent);
+
+  // 右：露水
+  const right = layout.hudRight;
+  fillRoundRect(ctx, right.x + 2, right.y + 3, right.w, right.h, 13, withAlpha(palette.shadow, 0.1));
+  fillRoundRect(ctx, right.x, right.y, right.w, right.h, 13, withAlpha(palette.panel, 0.9));
+  strokeRoundRect(ctx, right.x + 0.5, right.y + 0.5, right.w - 1, right.h - 1, 12.5, withAlpha(palette.panelEdge, 0.8), 1);
+  drawDewDrop(ctx, right.x + 24, right.y + 24, 7.5, palette, 1);
+  drawText(ctx, '露水', right.x + 42, right.y + 19, font(9, 400), palette.inkFaint, 'left', 'alphabetic');
+  drawText(
+    ctx,
+    theme.formatDew(view.dew),
+    right.x + 42,
+    right.y + 39,
+    font(21, 700),
+    palette.ink,
+    'left',
+    'alphabetic'
+  );
+  drawText(
+    ctx,
+    '每秒 ' + theme.formatRate(view.rate),
+    right.x + 228,
+    right.y + 39,
+    font(10, 400),
+    palette.inkSoft,
+    'right',
+    'alphabetic'
+  );
+
+  // buff
+  if (view.buff.active) {
+    const buff = layout.buff;
+    fillRoundRect(ctx, buff.x, buff.y, buff.w, buff.h, 9, withAlpha(palette.buffGlow, 0.2));
+    strokeRoundRect(ctx, buff.x + 0.5, buff.y + 0.5, buff.w - 1, buff.h - 1, 8.5, withAlpha(palette.buffGlow, 0.7), 1);
+    fillEllipse(ctx, buff.x + 16, buff.y + 13, 4, 5.5, palette.accentWarm);
+    drawText(
+      ctx,
+      '稀有种子 ×' + view.buff.mult.toFixed(1) + ' · ' + theme.formatCountdown(view.buff.remainingSec),
+      buff.x + 28,
+      buff.y + 17,
+      font(11, 600),
+      palette.ink,
+      'left',
+      'alphabetic'
+    );
+  }
+}
+
+function drawToast(ctx, layout, palette, ui) {
+  const hint = ui.hint;
+  if (!hint) return;
+  const age = Math.max(0, (ui.nowMs || 0) - hint.at);
+  const alpha = age > 1200 ? clamp(1 - (age - 1200) / 400, 0, 1) : 1;
+  if (alpha <= 0) return;
+  ctx.globalAlpha = alpha;
+  const toast = layout.toast;
+  const w = Math.min(toast.w, 220 + hint.text.length * 13);
+  const x = toast.centerX - w / 2;
+  fillRoundRect(ctx, x, toast.y, w, 30, 10, withAlpha(palette.ink, 0.72));
+  const toneColor = hint.tone === 'warn' ? palette.flower : hint.tone === 'success' ? palette.buffGlow : palette.paper;
+  drawText(ctx, hint.text, toast.centerX, toast.y + 20, font(12, 600), toneColor, 'center', 'alphabetic');
+  ctx.globalAlpha = 1;
+}
+
+function drawFx(ctx, palette, ui) {
+  const fx = ui.fx || [];
+  for (let i = 0; i < fx.length; i += 1) {
+    const item = fx[i];
+    const age = Math.max(0, (ui.nowMs || 0) - item.at) / 1000;
+    if (age > 0.9) continue;
+    const alpha = clamp(1 - age / 0.9, 0, 1);
+    ctx.globalAlpha = alpha;
+    if (item.kind === 'harvest') {
+      drawText(ctx, '+' + theme.formatDew(item.gain), item.x, item.y - 8 - age * 22, font(14, 700), palette.accent, 'center', 'alphabetic');
+      drawDewDrop(ctx, item.x - 20, item.y - 10 - age * 22, 4, palette, alpha * 0.9);
+    } else if (item.kind === 'sparkle') {
+      for (let k = 0; k < 6; k += 1) {
+        const a = (Math.PI * 2 * k) / 6 + age * 2;
+        const d = 8 + age * 26;
+        fillCircle(ctx, item.x + Math.cos(a) * d, item.y + Math.sin(a) * d, 1.6 * (1 - age), palette.buffGlow);
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---------------------------------------------------------------------------
+// 弹窗
+// ---------------------------------------------------------------------------
+
+function drawLetterModal(ctx, layout, palette, view) {
+  ctx.fillStyle = withAlpha(palette.shadow, 0.42);
+  ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+  const panel = layout.letter.panel;
+  fillRoundRect(ctx, panel.x + 3, panel.y + 5, panel.w, panel.h, 16, withAlpha(palette.shadow, 0.3));
+  fillRoundRect(ctx, panel.x, panel.y, panel.w, panel.h, 16, palette.panel);
+  strokeRoundRect(ctx, panel.x + 0.5, panel.y + 0.5, panel.w - 1, panel.h - 1, 15.5, withAlpha(palette.panelEdge, 0.9), 1.4);
+  // 纸上胶带
+  fillRoundRect(ctx, panel.x - 10, panel.y + 12, 56, 16, 3, withAlpha(palette.accentWarm, 0.22));
+  fillRoundRect(ctx, panel.x + panel.w - 46, panel.y + panel.h - 30, 56, 16, 3, withAlpha(palette.accentWarm, 0.22));
+  drawText(ctx, '一封手写信', panel.centerX, panel.y + 30, font(13, 600), palette.inkFaint, 'center', 'alphabetic');
+  ctx.strokeStyle = withAlpha(palette.panelEdge, 0.8);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(panel.x + 60, panel.y + 40);
+  ctx.lineTo(panel.x + panel.w - 60, panel.y + 40);
+  ctx.stroke();
+
+  const textFont = font(17, 400);
+  const lines = wrapText(ctx, view.letterText, panel.w - 110, textFont);
+  ctx.font = textFont;
+  for (let i = 0; i < lines.length; i += 1) {
+    drawText(
+      ctx,
+      lines[i],
+      panel.centerX,
+      panel.y + 76 + i * 28,
+      textFont,
+      palette.ink,
+      'center',
+      'alphabetic'
+    );
+  }
+  drawText(
+    ctx,
+    '点击任意处，把这段回忆收好',
+    panel.centerX,
+    panel.y + panel.h - 18,
+    font(11, 400),
+    palette.inkFaint,
+    'center',
+    'alphabetic'
+  );
+  fillCircle(ctx, panel.x + panel.w - 34, panel.y + panel.h - 44, 9, withAlpha(palette.accentWarm, 0.75));
+  drawText(ctx, '回', panel.x + panel.w - 34, panel.y + panel.h - 40, font(10, 700), palette.paper, 'center', 'alphabetic');
+}
+
+function drawOfflineModal(ctx, layout, palette, info) {
+  ctx.fillStyle = withAlpha(palette.shadow, 0.46);
+  ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+  const panel = layout.offline.panel;
+  fillRoundRect(ctx, panel.x + 3, panel.y + 6, panel.w, panel.h, 16, withAlpha(palette.shadow, 0.35));
+  fillRoundRect(ctx, panel.x, panel.y, panel.w, panel.h, 16, palette.panel);
+  strokeRoundRect(ctx, panel.x + 0.5, panel.y + 0.5, panel.w - 1, panel.h - 1, 15.5, withAlpha(palette.panelEdge, 0.9), 1.4);
+  drawText(ctx, '离线归来', panel.centerX, panel.y + 36, font(20, 700), palette.accent, 'center', 'alphabetic');
+  drawText(
+    ctx,
+    '你离开了 ' + theme.formatDuration(info.elapsedSec) + '，庭院替你攒下',
+    panel.centerX,
+    panel.y + 62,
+    font(12, 400),
+    palette.inkSoft,
+    'center',
+    'alphabetic'
+  );
+  drawText(
+    ctx,
+    theme.formatDew(info.gain) + ' 露水',
+    panel.centerX,
+    panel.y + 94,
+    font(26, 700),
+    palette.accentWarm,
+    'center',
+    'alphabetic'
+  );
+  const note = info.capped
+    ? '已按 50% 效率、8 小时上限结算（离开 ' + theme.formatDuration(info.elapsedSec) + '）'
+    : '按 50% 效率结算 · 最多 8 小时';
+  drawText(ctx, note, panel.centerX, panel.y + 116, font(10, 400), palette.inkFaint, 'center', 'alphabetic');
+  const button = layout.offline.button;
+  fillRoundRect(ctx, button.x, button.y, button.w, button.h, 10, palette.accent);
+  strokeRoundRect(ctx, button.x + 0.5, button.y + 0.5, button.w - 1, button.h - 1, 9.5, withAlpha(palette.ink, 0.2), 1);
+  drawText(ctx, '收下', button.centerX, button.centerY + 5, font(15, 700), palette.paper, 'center', 'alphabetic');
+  // 收下按钮旁的露水
+  drawDewDrop(ctx, button.x - 18, button.centerY - 4, 6, palette, 0.9);
+}
+
+// ---------------------------------------------------------------------------
+// 主绘制
+// ---------------------------------------------------------------------------
+
+/**
+ * 画一帧。
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {object} view logic.getView 结果
+ * @param {object} [ui] { time, nowMs, hint, fx, offline, transition, pressed }
+ * @returns {object} layout
+ */
+function render(ctx, view, ui) {
+  const u = ui || {};
+  const layout = u.layout || computeLayout();
+  const time = Number(u.time) || 0;
+  const isNight = view.phase === 'night';
+  let palette = theme.getPalette(view.season, view.phase);
+  if (u.transition) {
+    const from = theme.getPalette(u.transition.fromSeason, u.transition.fromPhase);
+    const t = clamp(((u.nowMs || 0) - u.transition.startAt) / 500, 0, 1);
+    palette = theme.mixPalette(from, palette, t);
+  }
+  if (u.palette) palette = u.palette;
+
+  // 纸面
+  ctx.fillStyle = palette.paper;
+  ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+
+  // 天空
+  const sky = safeGradient(ctx, 'linear', 0, 0, 0, SKY_H + 22, [
+    [0, palette.skyTop],
+    [0.55, palette.skyMid],
+    [1, palette.skyBottom],
+  ]);
+  ctx.fillStyle = sky || palette.skyMid;
+  ctx.fillRect(0, 0, LOGICAL_WIDTH, SKY_H + 20);
+
+  if (isNight) drawStars(ctx, palette, time);
+  if (view.phase === 'day') drawSun(ctx, palette, view.phaseProgress);
+  else drawMoon(ctx, palette, view.phaseProgress);
+  drawClouds(ctx, palette, time, isNight);
+  drawTerrain(ctx, layout, palette);
+
+  // 种植槽
+  for (let i = 0; i < view.plots.length && i < layout.plots.length; i += 1) {
+    drawPlot(ctx, layout, palette, view.plots[i], time);
+  }
+  // 设施
+  for (let i = 0; i < view.buildings.length && i < layout.facilities.length; i += 1) {
+    drawFacility(ctx, layout, palette, i, view.buildings[i], time, isNight);
+  }
+  // 访客
+  if (view.visitor) drawVisitor(ctx, layout, palette, view, time);
+  // 信封
+  if (view.letter === 'ready') drawEnvelope(ctx, layout, palette, time);
+
+  // HUD / 提示
+  drawHud(ctx, layout, palette, view, time);
+  drawToast(ctx, layout, palette, u);
+  drawFx(ctx, palette, u);
+
+  // 弹窗（最后绘制，模态）
+  if (view.letter === 'open') drawLetterModal(ctx, layout, palette, view);
+  if (u.offline) drawOfflineModal(ctx, layout, palette, u.offline);
+  return layout;
+}
+
+module.exports = {
+  LOGICAL_WIDTH: LOGICAL_WIDTH,
+  LOGICAL_HEIGHT: LOGICAL_HEIGHT,
+  SKY_H: SKY_H,
+  GROUND_TOP: GROUND_TOP,
+  PLOT_CENTERS: PLOT_CENTERS,
+  FACILITY_CENTERS: FACILITY_CENTERS,
+  FACILITY_IDS: FACILITY_IDS,
+  FACILITY_NAMES: FACILITY_NAMES,
+  computeLayout: computeLayout,
+  hitTest: hitTest,
+  visitorRect: visitorRect,
+  pointIn: pointIn,
+  render: render,
+  drawDewDrop: drawDewDrop,
+};
+
+};
+__modules["main"] = function (module, exports, require) {
+'use strict';
+
+/**
+ * 庭院微光 · 桌面条（B1）· 外壳层
+ *
+ * DOM 只保留一块 <canvas>（无任何 DOM 按钮）。固定逻辑分辨率 1280×240：
+ *  - 每帧在逻辑坐标里绘制；canvas 的 CSS 尺寸按窗口等比缩放并居中；
+ *  - 内部像素 = 逻辑尺寸 × pixelRatio（受 dpr 与缩放影响，封顶 2），保证清晰；
+ *  - 指针坐标用当帧 getBoundingClientRect() 反算回逻辑像素。
+ *
+ * 时间：
+ *  - 可见帧 dt 限制在 [0, 0.25]s，长帧丢弃余量；
+ *  - 读档/切后台恢复且间隔 ≥60s 时走离线结算（50% / 8 小时上限）。
+ *
+ * 为可在 Node 里做纯逻辑/外壳冒烟，导出 createShell(options)；
+ * 浏览器入口 boot() 仅在存在 document 时自动执行。
+ */
+
+const logic = require('./logic');
+const render = require('./render');
+const theme = require('./theme');
+
+const LOGICAL_WIDTH = render.LOGICAL_WIDTH;
+const LOGICAL_HEIGHT = render.LOGICAL_HEIGHT;
+const ACTIVE_MAX_DT_SEC = 0.25;
+const OFFLINE_MIN_SEC = 10;
+const SAVE_INTERVAL_MS = 5000;
+const HINT_MS = 1600;
+const FX_MS = 900;
+const MAX_PIXEL_RATIO = 2;
+const TRANSITION_MS = 500;
+
+function clamp(value, min, max) {
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
+
+function readTuningFromWindow() {
+  if (typeof window !== 'undefined' && window.__STRIP_TUNING__) return window.__STRIP_TUNING__;
+  return logic.DEFAULT_TUNING;
+}
+
+/** 创建游戏外壳（可测试；不依赖 DOM 全局）。 */
+function createShell(options) {
+  const opts = options || {};
+  const canvas = opts.canvas;
+  if (!canvas) throw new Error('E_SHELL: 缺少 canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('E_SHELL: 无法获取 2D 上下文');
+  const now =
+    opts.now ||
+    function () {
+      return Date.now();
+    };
+  const perfNow =
+    typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+      ? function () {
+          return performance.now();
+        }
+      : now;
+  const tuning = logic.normalizeTuning(opts.tuning || readTuningFromWindow());
+  const storage =
+    opts.storage !== undefined ? opts.storage : typeof localStorage !== 'undefined' ? localStorage : null;
+  const raf =
+    opts.raf ||
+    (typeof requestAnimationFrame !== 'undefined'
+      ? function (cb) {
+          return requestAnimationFrame(cb);
+        }
+      : function (cb) {
+          return setTimeout(function () {
+            cb(now());
+          }, 16);
+        });
+  const cancelRaf =
+    opts.cancelRaf ||
+    (typeof cancelAnimationFrame !== 'undefined'
+      ? function (id) {
+          cancelAnimationFrame(id);
+        }
+      : function (id) {
+          clearTimeout(id);
+        });
+
+  let viewportW = Math.max(1, Math.round(Number(opts.viewportW) || LOGICAL_WIDTH));
+  let viewportH = Math.max(1, Math.round(Number(opts.viewportH) || LOGICAL_HEIGHT));
+  let dpr = clamp(Number(opts.dpr) || 1, 0.5, 4);
+  let scale = 1;
+  let pixelRatio = 1;
+
+  let state = logic.createState(tuning);
+  let model = logic.getView(state);
+  const ui = {
+    time: 0,
+    nowMs: 0,
+    timeOverride: null,
+    hint: null,
+    fx: [],
+    offline: null,
+    transition: null,
+    pressed: null,
+    pressedUntil: 0,
+  };
+  let layout = render.computeLayout();
+  let lastFrameMs = now();
+  let lastSaveMs = lastFrameMs;
+  let saveCount = 0;
+  let tickCount = 0;
+  let lastDt = 0;
+  let maxDt = 0;
+  let lastPhase = model.phase;
+  let lastSeason = model.season;
+  let lastVisitor = !!model.visitor;
+  let lastLetter = model.letter;
+  let hiddenFlag = false;
+  let running = false;
+  let rafId = null;
+  let drawMs = 0;
+  let tickMs = 0;
+  let maxDrawMs = 0;
+  let frameCount = 0;
+
+  // -------------------------------------------------------------------------
+  // 提示 / 存档 / 离线
+  // -------------------------------------------------------------------------
+
+  function touchHint(text, tone, at) {
+    ui.hint = { text: String(text), tone: tone || 'info', at: at === undefined ? now() : at };
+  }
+
+  function refreshModel(at) {
+    ui.nowMs = at;
+    ui.time = ui.timeOverride === null ? at / 1000 : ui.timeOverride;
+    model = logic.getView(state);
+    if (model.phase !== lastPhase || model.season !== lastSeason) {
+      const transition = {
+        fromSeason: lastSeason,
+        fromPhase: lastPhase,
+        startAt: at,
+      };
+      ui.transition = transition;
+      lastPhase = model.phase;
+      lastSeason = model.season;
+    }
+    if (ui.transition && at - ui.transition.startAt > TRANSITION_MS + 60) ui.transition = null;
+    if (ui.hint && at - ui.hint.at > HINT_MS) ui.hint = null;
+    if (ui.fx.length) ui.fx = ui.fx.filter(function (item) {
+      return at - item.at <= FX_MS;
+    });
+    return model;
+  }
+
+  function save(atMs) {
+    const at = atMs === undefined ? now() : atMs;
+    logic.markSeen(state, at);
+    saveCount += 1;
+    if (!storage) return false;
+    try {
+      storage.setItem(tuning.save.key, logic.serialize(state));
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function settleOffline(elapsedSec, at) {
+    const elapsed = Math.max(0, Number(elapsedSec) || 0);
+    if (elapsed <= 0) return null;
+    const info = logic.applyOffline(state, elapsed);
+    if (info.gain > 0) ui.offline = info;
+    logic.markSeen(state, at);
+    return info;
+  }
+
+  /** 读档：坏档降级、≥60s 间隔结算离线。 */
+  function load(atMs) {
+    const at = atMs === undefined ? now() : atMs;
+    let raw = null;
+    let hadSave = false;
+    if (storage) {
+      try {
+        raw = storage.getItem(tuning.save.key);
+        hadSave = raw !== null && raw !== undefined;
+      } catch (err) {
+        raw = null;
+      }
+    }
+    state = hadSave ? logic.deserialize(raw, tuning) : logic.createState(tuning);
+    const gapSec = state.lastSeenMs > 0 ? Math.max(0, (at - state.lastSeenMs) / 1000) : 0;
+    if (hadSave && gapSec >= OFFLINE_MIN_SEC) {
+      settleOffline(gapSec, at);
+      save(at);
+    } else {
+      logic.markSeen(state, at);
+    }
+    const saveError = logic.getSaveError(state);
+    if (saveError === logic.SAVE_CORRUPT) touchHint('存档损坏，已为你重新开始', 'warn', at);
+    else if (saveError === logic.SAVE_VERSION) touchHint('存档版本不兼容，已重新开始', 'warn', at);
+
+    lastPhase = model.phase;
+    lastSeason = model.season;
+    refreshModel(at);
+    lastPhase = model.phase;
+    lastSeason = model.season;
+    lastVisitor = !!model.visitor;
+    lastLetter = model.letter;
+    lastFrameMs = at;
+    lastSaveMs = at;
+    return { offline: ui.offline, saveError: saveError, hadSave: hadSave };
+  }
+
+  function hidden(atMs) {
+    const at = atMs === undefined ? now() : atMs;
+    hiddenFlag = true;
+    save(at);
+    lastFrameMs = at;
+  }
+
+  function visible(atMs) {
+    const at = atMs === undefined ? now() : atMs;
+    hiddenFlag = false;
+    lastFrameMs = at;
+    const gapSec = state.lastSeenMs > 0 ? Math.max(0, (at - state.lastSeenMs) / 1000) : 0;
+    if (gapSec >= OFFLINE_MIN_SEC) {
+      settleOffline(gapSec, at);
+      save(at);
+      lastSaveMs = at;
+    } else {
+      logic.markSeen(state, at);
+    }
+    draw(at);
+    return ui.offline;
+  }
+
+  // -------------------------------------------------------------------------
+  // 尺寸 / 绘制 / 帧循环
+  // -------------------------------------------------------------------------
+
+  /**
+   * 等比缩放居中：canvas CSS 尺寸 = 1280×240 × scale；
+   * 内部像素 = 逻辑尺寸 × pixelRatio，指针坐标用 getBoundingClientRect 反算。
+   */
+  function resize(nextViewportW, nextViewportH, nextDpr) {
+    viewportW = Math.max(1, Math.round(Number(nextViewportW) || viewportW));
+    viewportH = Math.max(1, Math.round(Number(nextViewportH) || viewportH));
+    if (nextDpr !== undefined) dpr = clamp(Number(nextDpr) || 1, 0.5, 4);
+    scale = Math.min(viewportW / LOGICAL_WIDTH, viewportH / LOGICAL_HEIGHT);
+    if (!Number.isFinite(scale) || scale <= 0) scale = 1;
+    pixelRatio = clamp(scale * dpr, 1, MAX_PIXEL_RATIO);
+    const cssW = Math.max(1, Math.round(LOGICAL_WIDTH * scale));
+    const cssH = Math.max(1, Math.round(LOGICAL_HEIGHT * scale));
+    canvas.width = Math.max(1, Math.round(LOGICAL_WIDTH * pixelRatio));
+    canvas.height = Math.max(1, Math.round(LOGICAL_HEIGHT * pixelRatio));
+    if (canvas.style) {
+      canvas.style.width = cssW + 'px';
+      canvas.style.height = cssH + 'px';
+    }
+    if (typeof ctx.setTransform === 'function') ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    else if (typeof ctx.scale === 'function') ctx.scale(pixelRatio, pixelRatio);
+    layout = render.computeLayout();
+    return { width: cssW, height: cssH, scale: scale, pixelRatio: pixelRatio };
+  }
+
+  function draw(atMs) {
+    const at = atMs === undefined ? now() : atMs;
+    const started = perfNow();
+    refreshModel(at);
+    if (ui.pressed && at >= ui.pressedUntil) ui.pressed = null;
+    layout = render.render(ctx, model, ui);
+    const cost = perfNow() - started;
+    drawMs = drawMs === 0 ? cost : drawMs * 0.85 + cost * 0.15;
+    if (cost > maxDrawMs) maxDrawMs = cost;
+    frameCount += 1;
+    return layout;
+  }
+
+  function checkTransitions(at) {
+    if (!!model.visitor !== lastVisitor) {
+      lastVisitor = !!model.visitor;
+      if (model.visitor) {
+        const names = { bird: '小鸟', cat: '小猫', rabbit: '小兔' };
+        touchHint(names[model.visitor.kind] + '路过庭院，点它看看', 'info', at);
+      }
+    }
+    if (model.letter !== lastLetter) {
+      lastLetter = model.letter;
+      if (model.letter === 'ready') touchHint('门口出现了一封信', 'success', at);
+    }
+  }
+
+  function frame(atMs) {
+    const at = atMs === undefined ? now() : atMs;
+    if (hiddenFlag) return state;
+    let rawDt = (at - lastFrameMs) / 1000;
+    lastFrameMs = at;
+    if (!Number.isFinite(rawDt) || rawDt < 0) rawDt = 0;
+    const dt = Math.min(rawDt, ACTIVE_MAX_DT_SEC);
+    lastDt = dt;
+    if (dt > maxDt) maxDt = dt;
+    if (dt > 0) {
+      const tickStarted = perfNow();
+      logic.tick(state, dt);
+      tickMs = tickMs === 0 ? perfNow() - tickStarted : tickMs * 0.85 + (perfNow() - tickStarted) * 0.15;
+      tickCount += 1;
+      refreshModel(at);
+      checkTransitions(at);
+    }
+    if (at - lastSaveMs >= SAVE_INTERVAL_MS) {
+      save(at);
+      lastSaveMs = at;
+    }
+    draw(at);
+    return state;
+  }
+
+  // -------------------------------------------------------------------------
+  // 指针命中
+  // -------------------------------------------------------------------------
+
+  function pointer(x, y, atMs) {
+    const at = atMs === undefined ? now() : atMs;
+    if (hiddenFlag) return null;
+    refreshModel(at);
+    if (ui.offline) {
+      const modalHit = render.hitTest(layout, x, y, { offline: true });
+      if (modalHit && modalHit.type === 'offlineAccept') {
+        ui.offline = null;
+        save(at);
+        draw(at);
+      }
+      return modalHit;
+    }
+    if (model.letter === 'open') {
+      const closed = logic.finishLetter(state);
+      if (closed) {
+        save(at);
+        touchHint('回忆已收好：薄荷与竹帘', 'success', at);
+      }
+      draw(at);
+      return closed ? { type: 'letterClose' } : { type: 'letterBlock' };
+    }
+    const hit = render.hitTest(layout, x, y, {
+      envelope: model.letter === 'ready',
+      visitor: model.visitor,
+      timeSec: ui.time,
+    });
+    if (!hit) return null;
+
+    if (hit.type === 'plot') {
+      const result = logic.harvest(state, hit.index);
+      if (result.ok) {
+        ui.fx.push({ kind: 'harvest', gain: result.gain, x: x, y: y, at: at });
+        ui.pressed = { type: 'plot', index: hit.index };
+        ui.pressedUntil = at + 150;
+        save(at);
+      } else {
+        touchHint('还没成熟：再等 ' + Math.ceil(model.plots[hit.index].remainingSec) + ' 秒', 'warn', at);
+      }
+      draw(at);
+      return hit;
+    }
+    if (hit.type === 'facility') {
+      const building = model.buildings[hit.index];
+      if (!building) return hit;
+      const before = building.level;
+      const bought = logic.buy(state, building.id);
+      if (bought) {
+        ui.fx.push({ kind: 'sparkle', x: layout.facilities[hit.index].cx, y: 200, at: at });
+        touchHint(building.name + ' 升到 Lv.' + (before + 1), 'success', at);
+        save(at);
+      } else {
+        touchHint('露水不足：需要 ' + theme.formatDew(building.cost), 'warn', at);
+      }
+      ui.pressed = { type: 'facility', index: hit.index };
+      ui.pressedUntil = at + 150;
+      draw(at);
+      return hit;
+    }
+    if (hit.type === 'visitor') {
+      const claimed = logic.claimVisitor(state);
+      if (claimed) {
+        ui.fx.push({ kind: 'sparkle', x: layout.visitorHome.x, y: 208, at: at });
+        touchHint('获得稀有种子：收获 ×' + tuning.visitor.buffMult.toFixed(1) + '，持续 10 分钟', 'success', at);
+        save(at);
+      }
+      draw(at);
+      return hit;
+    }
+    if (hit.type === 'envelope') {
+      logic.openLetter(state);
+      draw(at);
+      return hit;
+    }
+    return hit;
+  }
+
+  // -------------------------------------------------------------------------
+  // 循环
+  // -------------------------------------------------------------------------
+
+  function loop() {
+    if (!running) return;
+    try {
+      frame();
+    } catch (err) {
+      if (typeof console !== 'undefined' && console.error) console.error('[courtyard-strip] frame error', err);
+    }
+    rafId = raf(loop);
+  }
+
+  function start() {
+    if (running) return;
+    running = true;
+    lastFrameMs = now();
+    rafId = raf(loop);
+  }
+
+  function stop() {
+    running = false;
+    if (rafId !== null) {
+      cancelRaf(rafId);
+      rafId = null;
+    }
+  }
+
+  function destroy() {
+    stop();
+    save();
+  }
+
+  /** 逐帧绘制基准（取证用）：返回平均 draw 毫秒。 */
+  function benchmark(frames) {
+    const count = Math.max(1, Math.min(600, Math.floor(Number(frames) || 60)));
+    const at = now();
+    let total = 0;
+    for (let i = 0; i < count; i += 1) {
+      const t0 = perfNow();
+      refreshModel(at + i);
+      layout = render.render(ctx, model, ui);
+      total += perfNow() - t0;
+    }
+    return total / count;
+  }
+
+  function debugApply(patch) {
+    const p = patch || {};
+    const s = p.state;
+    if (s) {
+      const keys = [
+        'dew',
+        'total',
+        'cycleT',
+        'seasonT',
+        'season',
+        'playT',
+        'visitorT',
+        'buffT',
+        'letter',
+        'lastSeenMs',
+      ];
+      for (let i = 0; i < keys.length; i += 1) {
+        if (Object.prototype.hasOwnProperty.call(s, keys[i])) state[keys[i]] = s[keys[i]];
+      }
+      if (s.levels) {
+        const ids = Object.keys(s.levels);
+        for (let i = 0; i < ids.length; i += 1) state.levels[ids[i]] = s.levels[ids[i]];
+      }
+      if (Array.isArray(s.plots)) {
+        for (let i = 0; i < state.plots.length && i < s.plots.length; i += 1) {
+          state.plots[i].g = s.plots[i] && typeof s.plots[i] === 'object' ? s.plots[i].g : s.plots[i];
+        }
+      }
+      if (s.visitor !== undefined) state.visitor = s.visitor;
+      if (Array.isArray(s.memories)) state.memories = s.memories.slice();
+    }
+    const u = p.ui;
+    if (u) {
+      if (u.timeSec !== undefined) ui.timeOverride = Number(u.timeSec);
+      if (u.hint !== undefined) ui.hint = u.hint === null ? null : { text: u.hint, tone: u.tone || 'info', at: now() };
+      if (u.offline !== undefined) ui.offline = u.offline;
+      if (u.fx === null) ui.fx = [];
+    }
+    refreshModel(now());
+    ui.transition = null; // 调试跳转直接落到目标色板，便于取证
+    lastPhase = model.phase;
+    lastSeason = model.season;
+    lastVisitor = !!model.visitor;
+    lastLetter = model.letter;
+    draw(now());
+    return model;
+  }
+
+  resize(viewportW, viewportH, dpr);
+
+  return {
+    start: start,
+    stop: stop,
+    destroy: destroy,
+    load: load,
+    visible: visible,
+    hidden: hidden,
+    resize: resize,
+    frame: frame,
+    draw: draw,
+    pointer: pointer,
+    save: save,
+    getSaveData: function () {
+      return logic.serialize(state);
+    },
+    benchmark: benchmark,
+    debugApply: debugApply,
+    getState: function () {
+      return state;
+    },
+    getModel: function () {
+      return model;
+    },
+    getView: function () {
+      return model;
+    },
+    getUi: function () {
+      return ui;
+    },
+    getLayout: function () {
+      return layout;
+    },
+    getSize: function () {
+      return {
+        width: LOGICAL_WIDTH * scale,
+        height: LOGICAL_HEIGHT * scale,
+        scale: scale,
+        pixelRatio: pixelRatio,
+        viewportW: viewportW,
+        viewportH: viewportH,
+      };
+    },
+    getTuning: function () {
+      return tuning;
+    },
+    getStats: function () {
+      return {
+        drawMs: drawMs,
+        maxDrawMs: maxDrawMs,
+        tickMs: tickMs,
+        lastDt: lastDt,
+        maxDt: maxDt,
+        saveCount: saveCount,
+        tickCount: tickCount,
+        frameCount: frameCount,
+        hidden: hiddenFlag,
+      };
+    },
+  };
+}
+
+/** 浏览器入口：只绑定一块 canvas + 窗口事件（DOM 按钮为零）。 */
+function boot() {
+  const canvas =
+    document.getElementById('game') || (document.querySelector ? document.querySelector('canvas') : null);
+  if (!canvas || typeof canvas.getContext !== 'function') return null;
+  const shell = createShell({
+    canvas: canvas,
+    viewportW: (window && window.innerWidth) || LOGICAL_WIDTH,
+    viewportH: (window && window.innerHeight) || LOGICAL_HEIGHT,
+    dpr: (window && window.devicePixelRatio) || 1,
+  });
+  shell.load();
+  const fit = function () {
+    shell.resize(
+      (window && window.innerWidth) || LOGICAL_WIDTH,
+      (window && window.innerHeight) || LOGICAL_HEIGHT,
+      (window && window.devicePixelRatio) || 1
+    );
+    shell.draw(Date.now());
+  };
+  window.addEventListener('resize', fit);
+  window.addEventListener('orientationchange', fit);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) shell.hidden();
+    else shell.visible();
+  });
+  window.addEventListener('pagehide', function () {
+    shell.hidden();
+  });
+  canvas.addEventListener('pointerdown', function (event) {
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const x = rect.width ? ((event.clientX - rect.left) / rect.width) * LOGICAL_WIDTH : -1;
+    const y = rect.height ? ((event.clientY - rect.top) / rect.height) * LOGICAL_HEIGHT : -1;
+    shell.pointer(x, y, Date.now());
+  });
+  fit();
+  shell.start();
+  if (typeof window !== 'undefined') window.__STRIP__ = shell;
+  return shell;
+}
+
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () {
+      try {
+        boot();
+      } catch (err) {
+        if (typeof console !== 'undefined' && console.error) console.error('[courtyard-strip] boot error', err);
+      }
+    });
+  } else {
+    try {
+      boot();
+    } catch (err) {
+      if (typeof console !== 'undefined' && console.error) console.error('[courtyard-strip] boot error', err);
+    }
+  }
+}
+
+module.exports = {
+  createShell: createShell,
+  boot: boot,
+  ACTIVE_MAX_DT_SEC: ACTIVE_MAX_DT_SEC,
+  OFFLINE_MIN_SEC: OFFLINE_MIN_SEC,
+  SAVE_INTERVAL_MS: SAVE_INTERVAL_MS,
+  LOGICAL_WIDTH: LOGICAL_WIDTH,
+  LOGICAL_HEIGHT: LOGICAL_HEIGHT,
+};
+
+};
+__require("main");
+})();
+</script>
+</body>
+</html>
